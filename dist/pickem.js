@@ -626,6 +626,57 @@ ${actual ? `<div class="resultBadge ${!g.completed ? "pending" : !pick ? "pendin
       });
     return r;
   }
+  function rankingSnapshot(rankingWeek) {
+    const throughWeek = Math.max(0, Math.min(18, Number(rankingWeek || 1) - 1)),
+      result = {};
+    teams.forEach((t) => {
+      const code = t[0],
+        games = Object.values(ps.games)
+          .filter(
+            (g) =>
+              g.seasonType === 2 &&
+              g.completed &&
+              g.week <= throughWeek &&
+              (g.home === code || g.away === code),
+          )
+          .sort((a, b) => new Date(a.date) - new Date(b.date));
+      let w = 0,
+        l = 0,
+        tied = 0;
+      games.forEach((g) => {
+        if (g.homeScore === g.awayScore) tied++;
+        else if (g.winner === code) w++;
+        else l++;
+      });
+      let winStreak = 0;
+      for (let i = games.length - 1; i >= 0; i--) {
+        if (games[i].winner !== code) break;
+        winStreak++;
+      }
+      result[code] = {
+        record: `${w}-${l}${tied ? "-" + tied : ""}`,
+        w,
+        l,
+        t: tied,
+        winStreak,
+      };
+    });
+    return result;
+  }
+  async function syncRankingResults(rankingWeek, force = false) {
+    const throughWeek = Math.max(0, Math.min(18, Number(rankingWeek || 1) - 1));
+    ps.rankingSync ||= {};
+    const fresh = Date.now() - (ps.rankingSync[throughWeek] || 0) < 300000;
+    if (throughWeek && (!fresh || force)) {
+      await Promise.allSettled(
+        Array.from({ length: throughWeek }, (_, i) => fetchWeek(i + 1, 2)),
+      );
+      ps.rankingSync[throughWeek] = Date.now();
+      savePickem();
+    }
+    window.dispatchEvent(new CustomEvent("ledge-ranking-results"));
+    return rankingSnapshot(rankingWeek);
+  }
   function sortedTeams(list, r) {
     const power = current();
     return [...list].sort(
@@ -854,4 +905,7 @@ ${actual ? `<div class="resultBadge ${!g.completed ? "pending" : !pick ? "pendin
     if (!loaded) await loadSeason(true);
     openTeamDetail(code);
   };
+  window.getRankingSnapshot = rankingSnapshot;
+  window.syncRankingResults = syncRankingResults;
+  syncRankingResults(window.store?.week || store.week || 1);
 })();

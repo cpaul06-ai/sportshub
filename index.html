@@ -260,6 +260,55 @@
         font-weight: 650;
         margin-top: 2px;
       }
+      .rankFacts {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 5px;
+        min-height: 18px;
+      }
+      .rankRecord {
+        color: #a9b6c9;
+        font-size: 12px;
+        font-weight: 900;
+        font-variant-numeric: tabular-nums;
+      }
+      .rankStreak {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border: 1px solid #3fe19a66;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #123d2d, #0a221a);
+        color: #70efb3;
+        font-size: 10px;
+        font-weight: 950;
+        letter-spacing: 0.04em;
+        box-shadow: 0 0 12px #31d18b1f;
+      }
+      .rankFlame {
+        display: inline-block;
+        transform-origin: 50% 90%;
+        animation: rankFlame 0.72s ease-in-out infinite alternate;
+        filter: drop-shadow(0 0 5px #ff7a28aa);
+      }
+      @keyframes rankFlame {
+        0% { transform: translateY(1px) rotate(-4deg) scale(.92); filter: drop-shadow(0 0 3px #ff7a2877); }
+        55% { transform: translateY(-1px) rotate(3deg) scale(1.08); }
+        100% { transform: translateY(0) rotate(-1deg) scale(1); filter: drop-shadow(0 0 8px #ffb23daa); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .rankFlame { animation: none; }
+      }
+      .team[data-rank-team] {
+        cursor: pointer;
+        border-radius: 10px;
+      }
+      .team[data-rank-team]:focus-visible {
+        outline: 2px solid #7f9cff;
+        outline-offset: 4px;
+      }
       .noteInput {
         width: calc(100% - 12px);
         background: #090f1a;
@@ -1989,6 +2038,14 @@
         const p = previous();
         return p ? p.indexOf(c) - i : null;
       }
+      function rankingFact(c) {
+        return (
+          window.getRankingSnapshot?.(store.week)?.[c] || {
+            record: "0-0",
+            winStreak: 0,
+          }
+        );
+      }
       function save() {
         localStorage.setItem("carson-power-rankings", JSON.stringify(store));
         window.queueCloudSave?.();
@@ -2006,7 +2063,8 @@
           row.dataset.code = c;
           row.style.setProperty("--team", t.color);
           row.style.setProperty("--teamFade", t.color + "44");
-          row.innerHTML = `<div class="rank">${String(i + 1).padStart(2, "0")}</div><div class="team"><div class="logoBox"><img src="${logo(c)}" alt=""></div><div><div class="name">${t.name}</div><span class="city">${t.city}</span></div></div><div class="noteWrap"><input class="noteInput" aria-label="Note for ${t.city} ${t.name}" placeholder="Add a quick note…"><select class="tagSelect" aria-label="Tag for ${t.city} ${t.name}"></select><label class="dnpToggle"><input type="checkbox" aria-label="Did not play">DNP</label></div><div class="move ${d > 0 ? "up" : d < 0 ? "down" : "same"}">${d > 0 ? "▲ " + d : d < 0 ? "▼ " + Math.abs(d) : "—"}</div><div class="handle">•••</div>`;
+          const fact = rankingFact(c);
+          row.innerHTML = `<div class="rank">${String(i + 1).padStart(2, "0")}</div><div class="team" data-rank-team="${c}" tabindex="0" role="button" aria-label="Open ${t.city} ${t.name} team profile"><div class="logoBox"><img src="${logo(c)}" alt=""></div><div><div class="name">${t.name}</div><span class="city">${t.city}</span><div class="rankFacts"><span class="rankRecord">${fact.record}</span>${fact.winStreak >= 3 ? `<span class="rankStreak" aria-label="${fact.winStreak} game winning streak"><span class="rankFlame" aria-hidden="true">🔥</span>${fact.winStreak}</span>` : ""}</div></div></div><div class="noteWrap"><input class="noteInput" aria-label="Note for ${t.city} ${t.name}" placeholder="Add a quick note…"><select class="tagSelect" aria-label="Tag for ${t.city} ${t.name}"></select><label class="dnpToggle"><input type="checkbox" aria-label="Did not play">DNP</label></div><div class="move ${d > 0 ? "up" : d < 0 ? "down" : "same"}">${d > 0 ? "▲ " + d : d < 0 ? "▼ " + Math.abs(d) : "—"}</div><div class="handle">•••</div>`;
           const input = row.querySelector(".noteInput"),
             tag = row.querySelector(".tagSelect"),
             dnp = row.querySelector(".dnpToggle input"),
@@ -2029,6 +2087,14 @@
           };
           row.querySelector(".noteWrap").onmousedown = (e) =>
             e.stopPropagation();
+          const teamLink = row.querySelector("[data-rank-team]");
+          teamLink.onclick = () => window.openNFLTeam?.(c);
+          teamLink.onkeydown = (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              window.openNFLTeam?.(c);
+            }
+          };
           list.append(row);
         });
         renderSide();
@@ -2112,6 +2178,7 @@
         current();
         render();
         updateRankNav();
+        window.syncRankingResults?.(store.week);
       };
       document.querySelector("#rankPrev").onclick = () => changeRankWeek(-1);
       document.querySelector("#rankNext").onclick = () => changeRankWeek(1);
@@ -2120,6 +2187,7 @@
         current();
         render();
         updateRankNav();
+        window.syncRankingResults?.(store.week);
       }
       function updateRankNav() {
         document.querySelector("#rankPrev").disabled = store.week === 1;
@@ -2136,6 +2204,7 @@
         toast("Week " + store.week + " saved");
       };
       document.querySelector("#export").onclick = exportImage;
+      window.addEventListener("ledge-ranking-results", render);
       function toast(s) {
         const x = document.querySelector("#toast");
         x.textContent = s;
@@ -2527,7 +2596,8 @@
             note = (store.notes[key] || "").trim(),
             tag = store.tags[key] || "",
             isGold = c === featured,
-            isDNP = !!store.dnp[key];
+            isDNP = !!store.dnp[key],
+            fact = rankingFact(c);
           if (isGold) {
             const cg = ctx.createLinearGradient(x, y, x + 355, y + 94);
             cg.addColorStop(0, "#4e3810");
@@ -2563,15 +2633,33 @@
           ctx.textAlign = "left";
           ctx.fillStyle = "#fff";
           ctx.font = "900 22px system-ui";
-          ctx.fillText(t.name, x + 128, y + (note || tag ? 39 : 54));
+          ctx.fillText(t.name, x + 128, y + 34);
           if (note || tag) {
             ctx.font = "700 13px system-ui";
             ctx.fillStyle = isGold ? "#fff1bf" : tag ? "#ffc75b" : "#8995aa";
             ctx.fillText(
-              (tag + (tag && note ? "  •  " : "") + note).slice(0, 31),
+              (tag + (tag && note ? "  •  " : "") + note).slice(0, 27),
               x + 128,
-              y + 64,
+              y + 56,
             );
+          }
+          ctx.font = "900 13px system-ui";
+          ctx.fillStyle = isGold ? "#fff1bf" : "#9aabc1";
+          ctx.fillText(fact.record, x + 128, y + 80);
+          if (fact.winStreak >= 3) {
+            const sx = x + 172;
+            ctx.fillStyle = isGold ? "#5d4210" : "#113a2a";
+            round(ctx, sx, y + 65, 55, 21, 10);
+            ctx.fill();
+            ctx.strokeStyle = isGold ? "#ffe19a" : "#3fe19a";
+            ctx.lineWidth = 1;
+            round(ctx, sx, y + 65, 55, 21, 10);
+            ctx.stroke();
+            ctx.fillStyle = isGold ? "#fff2bf" : "#70efb3";
+            ctx.font = "950 11px system-ui";
+            ctx.textAlign = "center";
+            ctx.fillText(`🔥 ${fact.winStreak}`, sx + 27.5, y + 80);
+            ctx.textAlign = "left";
           }
           if (isGold) {
             ctx.fillStyle = "#fff1bf";
