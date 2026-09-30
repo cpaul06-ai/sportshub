@@ -2447,17 +2447,18 @@
         ctx.closePath();
         ctx.fill();
         ctx.globalAlpha = 1;
-        ctx.drawImage(brandImg, 35, 42, 470, 157);
+        // Keep the brand as a small corner signature so the ranking title owns the header.
+        ctx.drawImage(brandImg, 35, 42, 145, 48);
         ctx.textAlign = "left";
         ctx.fillStyle = "#7f9cff";
         ctx.font = "900 25px system-ui";
-        ctx.fillText(label, 515, 88);
+        ctx.fillText(label, 205, 88);
         ctx.fillStyle = "#fff";
         ctx.font = "950 49px system-ui";
-        ctx.fillText("POWER RANKINGS", 515, 145);
+        ctx.fillText("POWER RANKINGS", 205, 145);
         ctx.fillStyle = "#8290a6";
         ctx.font = "700 17px system-ui";
-        ctx.fillText("LEDGE  •  2026 NFL SEASON", 518, 180);
+        ctx.fillText("LEDGE  •  2026 NFL SEASON", 208, 180);
         if (featured) {
           const fg = ctx.createLinearGradient(825, 44, 1170, 194);
           fg.addColorStop(0, "#4b3408");
