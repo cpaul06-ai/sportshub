@@ -10,6 +10,7 @@
     />
     <link rel="stylesheet" href="pickem.css?v=20260921-5" />
     <link rel="stylesheet" href="account.css?v=20260921-5" />
+    <link rel="stylesheet" href="fantasy.css?v=20261001-1" />
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link
       rel="icon"
@@ -1712,7 +1713,8 @@
         </div>
         <nav class="globalNav" aria-label="Main navigation">
           <button class="globalTab active" data-global-view="home">Home</button
-          ><button class="globalTab" data-global-view="nfl">NFL</button>
+          ><button class="globalTab" data-global-view="nfl">NFL</button
+          ><button class="globalTab" data-global-view="fantasy">Fantasy</button>
         </nav>
         <div class="topActions">
           <div class="season">2026 NFL SEASON</div>
@@ -2817,8 +2819,10 @@
       render();
       updateRankNav();
     </script>
-    <script src="wire.js?v=20260922-1"></script>
+    <section class="fantasyView" id="fantasyView" hidden></section>
+    <script src="wire.js?v=20261001-1"></script>
     <script src="pickem.js?v=20260930-1"></script>
     <script src="account.js?v=20260922-1"></script>
+    <script src="fantasy.js?v=20261001-1"></script>
   </body>
 </html>

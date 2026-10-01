@@ -1,6 +1,7 @@
 (() => {
   const home = document.querySelector("#homeView"),
     nfl = document.querySelector("#nflView"),
+    fantasy = document.querySelector("#fantasyView"),
     tabs = document.querySelectorAll("[data-global-view]"),
     feed = document.querySelector("#wireFeed"),
     live = document.querySelector("#wireLive"),
@@ -21,9 +22,12 @@
     (b) =>
       (b.onclick = () => {
         tabs.forEach((x) => x.classList.toggle("active", x === b));
-        const isHome = b.dataset.globalView === "home";
-        home.hidden = !isHome;
-        nfl.hidden = isHome;
+        const selected = b.dataset.globalView,
+          isHome = selected === "home";
+        home.hidden = selected !== "home";
+        nfl.hidden = selected !== "nfl";
+        if (fantasy) fantasy.hidden = selected !== "fantasy";
+        if (selected === "fantasy") window.initTradeAnalyzer?.();
         if (isHome) {
           renderFeed();
           loadAnnouncements();
