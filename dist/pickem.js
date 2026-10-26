@@ -653,12 +653,20 @@ ${actual ? `<div class="resultBadge ${!g.completed ? "pending" : !pick ? "pendin
         if (games[i].winner !== code) break;
         winStreak++;
       }
+      let lossStreak = 0;
+      for (let i = games.length - 1; i >= 0; i--) {
+        const game = games[i],
+          tied = game.homeScore === game.awayScore;
+        if (tied || game.winner === code || !game.winner) break;
+        lossStreak++;
+      }
       result[code] = {
         record: `${w}-${l}${tied ? "-" + tied : ""}`,
         w,
         l,
         t: tied,
         winStreak,
+        lossStreak,
       };
     });
     return result;

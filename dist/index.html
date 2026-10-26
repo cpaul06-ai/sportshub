@@ -288,19 +288,36 @@
         letter-spacing: 0.04em;
         box-shadow: 0 0 12px #31d18b1f;
       }
+      .rankStreak.lossStreak {
+        border-color: #6cb7ff66;
+        background: linear-gradient(135deg, #102c49, #081a2d);
+        color: #9bd3ff;
+        box-shadow: 0 0 12px #3c9dff24;
+      }
       .rankFlame {
         display: inline-block;
         transform-origin: 50% 90%;
         animation: rankFlame 0.72s ease-in-out infinite alternate;
         filter: drop-shadow(0 0 5px #ff7a28aa);
       }
+      .rankIce {
+        display: inline-block;
+        transform-origin: 50% 50%;
+        animation: rankIce 1.15s ease-in-out infinite alternate;
+        filter: drop-shadow(0 0 4px #73c6ff99);
+      }
       @keyframes rankFlame {
         0% { transform: translateY(1px) rotate(-4deg) scale(.92); filter: drop-shadow(0 0 3px #ff7a2877); }
         55% { transform: translateY(-1px) rotate(3deg) scale(1.08); }
         100% { transform: translateY(0) rotate(-1deg) scale(1); filter: drop-shadow(0 0 8px #ffb23daa); }
       }
+      @keyframes rankIce {
+        0% { transform: rotate(-7deg) scale(.93); filter: drop-shadow(0 0 2px #73c6ff66); }
+        50% { transform: rotate(6deg) scale(1.08); }
+        100% { transform: rotate(-2deg) scale(1); filter: drop-shadow(0 0 8px #9fddffbb); }
+      }
       @media (prefers-reduced-motion: reduce) {
-        .rankFlame { animation: none; }
+        .rankFlame, .rankIce { animation: none; }
       }
       .team[data-rank-team] {
         cursor: pointer;
@@ -2045,6 +2062,7 @@
           window.getRankingSnapshot?.(store.week)?.[c] || {
             record: "0-0",
             winStreak: 0,
+            lossStreak: 0,
           }
         );
       }
@@ -2066,7 +2084,7 @@
           row.style.setProperty("--team", t.color);
           row.style.setProperty("--teamFade", t.color + "44");
           const fact = rankingFact(c);
-          row.innerHTML = `<div class="rank">${String(i + 1).padStart(2, "0")}</div><div class="team" data-rank-team="${c}" tabindex="0" role="button" aria-label="Open ${t.city} ${t.name} team profile"><div class="logoBox"><img src="${logo(c)}" alt=""></div><div><div class="name">${t.name}</div><span class="city">${t.city}</span><div class="rankFacts"><span class="rankRecord">${fact.record}</span>${fact.winStreak >= 3 ? `<span class="rankStreak" aria-label="${fact.winStreak} game winning streak"><span class="rankFlame" aria-hidden="true">🔥</span>${fact.winStreak}</span>` : ""}</div></div></div><div class="noteWrap"><input class="noteInput" aria-label="Note for ${t.city} ${t.name}" placeholder="Add a quick note…"><select class="tagSelect" aria-label="Tag for ${t.city} ${t.name}"></select><label class="dnpToggle"><input type="checkbox" aria-label="Did not play">DNP</label></div><div class="move ${d > 0 ? "up" : d < 0 ? "down" : "same"}">${d > 0 ? "▲ " + d : d < 0 ? "▼ " + Math.abs(d) : "—"}</div><div class="handle">•••</div>`;
+          row.innerHTML = `<div class="rank">${String(i + 1).padStart(2, "0")}</div><div class="team" data-rank-team="${c}" tabindex="0" role="button" aria-label="Open ${t.city} ${t.name} team profile"><div class="logoBox"><img src="${logo(c)}" alt=""></div><div><div class="name">${t.name}</div><span class="city">${t.city}</span><div class="rankFacts"><span class="rankRecord">${fact.record}</span>${fact.winStreak >= 3 ? `<span class="rankStreak" aria-label="${fact.winStreak} game winning streak"><span class="rankFlame" aria-hidden="true">🔥</span>${fact.winStreak}</span>` : fact.lossStreak >= 3 ? `<span class="rankStreak lossStreak" aria-label="${fact.lossStreak} game losing streak"><span class="rankIce" aria-hidden="true">🧊</span>${fact.lossStreak}</span>` : ""}</div></div></div><div class="noteWrap"><input class="noteInput" aria-label="Note for ${t.city} ${t.name}" placeholder="Add a quick note…"><select class="tagSelect" aria-label="Tag for ${t.city} ${t.name}"></select><label class="dnpToggle"><input type="checkbox" aria-label="Did not play">DNP</label></div><div class="move ${d > 0 ? "up" : d < 0 ? "down" : "same"}">${d > 0 ? "▲ " + d : d < 0 ? "▼ " + Math.abs(d) : "—"}</div><div class="handle">•••</div>`;
           const input = row.querySelector(".noteInput"),
             tag = row.querySelector(".tagSelect"),
             dnp = row.querySelector(".dnpToggle input"),
@@ -2662,6 +2680,20 @@
             ctx.textAlign = "center";
             ctx.fillText(`🔥 ${fact.winStreak}`, sx + 27.5, y + 80);
             ctx.textAlign = "left";
+          } else if (fact.lossStreak >= 3) {
+            const sx = x + 172;
+            ctx.fillStyle = isGold ? "#17324f" : "#102c49";
+            round(ctx, sx, y + 65, 55, 21, 10);
+            ctx.fill();
+            ctx.strokeStyle = "#75c4ff";
+            ctx.lineWidth = 1;
+            round(ctx, sx, y + 65, 55, 21, 10);
+            ctx.stroke();
+            ctx.fillStyle = "#a9dcff";
+            ctx.font = "950 11px system-ui";
+            ctx.textAlign = "center";
+            ctx.fillText(`🧊 ${fact.lossStreak}`, sx + 27.5, y + 80);
+            ctx.textAlign = "left";
           }
           if (isGold) {
             ctx.fillStyle = "#fff1bf";
@@ -2821,7 +2853,7 @@
     </script>
     <section class="fantasyView" id="fantasyView" hidden></section>
     <script src="wire.js?v=20261001-1"></script>
-    <script src="pickem.js?v=20260930-1"></script>
+    <script src="pickem.js?v=20261025-1"></script>
     <script src="account.js?v=20260922-1"></script>
     <script src="fantasy.js?v=20261001-1"></script>
   </body>
