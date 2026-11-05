@@ -31,7 +31,7 @@
   }
   function normalize(s) {
     const teams = Array.isArray(s.teams) && s.teams.length >= 2 ? s.teams : [makeTeam(1), makeTeam(2)];
-    return { format: s.format || "redraft", scoring: s.scoring || "ppr", qb: s.qb || "1qb", teams: teams.slice(0, 6), saved: Array.isArray(s.saved) ? s.saved : [], sleeper: s.sleeper || null };
+    return { format: s.format || "redraft", scoring: s.scoring || "ppr", qb: s.qb || "1qb", teams: teams.slice(0, 6), saved: Array.isArray(s.saved) ? s.saved : [], sleeper: s.sleeper || null, section: s.section || "trades", leagueRankings: s.leagueRankings || { week: window.store?.week || 1, weeks: {} } };
   }
   function esc(v) {
     return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -93,12 +93,95 @@
     return out;
   }
   function render() {
+    if (state.section === "rankings") return renderLeagueRankings();
     const total = totals(), nets = state.teams.map((t) => total[t.id].received - total[t.id].sent), spread = Math.max(...nets) - Math.min(...nets), fair = Math.max(0, Math.round(100 - spread * 2.25)), winner = Math.max(...nets), cols = Math.min(4, state.teams.length);
-    view.innerHTML = `<div class="tradeHero"><div><div class="tradeHeroMark">LEDGE FANTASY LAB</div><h1>Trade Analyzer</h1><p>Build two-team deals or full multi-team chaos. Every side gets graded.</p></div><button class="tradeAction primary" data-new-trade>New trade</button></div>
+    view.innerHTML = `${fantasyTabs()}<div class="tradeHero"><div><div class="tradeHeroMark">LEDGE FANTASY LAB</div><h1>Trade Analyzer</h1><p>Build two-team deals or full multi-team chaos. Every side gets graded.</p></div><button class="tradeAction primary" data-new-trade>New trade</button></div>
       <div class="tradeSettings"><label class="tradeSetting"><span>League</span><select data-setting="format"><option value="redraft">Redraft</option><option value="dynasty">Dynasty</option></select></label><label class="tradeSetting"><span>Scoring</span><select data-setting="scoring"><option value="ppr">PPR</option><option value="half">Half-PPR</option><option value="standard">Standard</option></select></label><label class="tradeSetting"><span>Quarterbacks</span><select data-setting="qb"><option value="1qb">1QB</option><option value="superflex">Superflex / 2QB</option></select></label><button class="tradeAction sleeperSync" data-sync-sleeper>${state.sleeper?.leagueName ? `✓ ${esc(state.sleeper.leagueName)}` : "Sync Sleeper"}</button><button class="tradeAction" data-add-team ${state.teams.length >= 6 ? "disabled" : ""}>＋ Add team</button><button class="tradeAction" data-save-trade>Save</button><button class="tradeAction" data-share-trade>Share link</button><button class="tradeAction" data-post-trade>Post to feed</button></div>
       <div class="tradeBoard" style="--trade-cols:${cols}">${state.teams.map((t, i) => teamCard(t, i, total[t.id])).join("")}</div>${analysis(total, nets, fair, winner)}${savedList()}`;
     view.querySelectorAll("[data-setting]").forEach((s) => { s.value = state[s.dataset.setting]; s.onchange = () => { state[s.dataset.setting] = s.value; persist(); render(); }; });
+    bindFantasyTabs();
     bind();
+  }
+  function fantasyTabs() {
+    return `<nav class="fantasyTabs" aria-label="Fantasy tools"><button class="fantasyTab ${state.section === "trades" ? "active" : ""}" data-fantasy-section="trades">Trade Analyzer</button><button class="fantasyTab ${state.section === "rankings" ? "active" : ""}" data-fantasy-section="rankings">League Rankings</button></nav>`;
+  }
+  function bindFantasyTabs() {
+    view.querySelectorAll("[data-fantasy-section]").forEach((button) => button.onclick = () => {
+      state.section = button.dataset.fantasySection;
+      persist();
+      render();
+      if (state.section === "rankings") refreshSleeperManagers();
+    });
+  }
+  function rankingState() {
+    state.leagueRankings ||= { week: 1, weeks: {} };
+    state.leagueRankings.weeks ||= {};
+    state.leagueRankings.notes ||= {};
+    state.leagueRankings.tags ||= {};
+    state.leagueRankings.teamWeek ||= {};
+    state.leagueRankings.teamWeekNotes ||= {};
+    return state.leagueRankings;
+  }
+  function currentLeagueRanking() {
+    const data = rankingState(), week = data.week, rosterIds = [...(state.sleeper?.rosters || [])].sort((a, b) => (b.wins || 0) - (a.wins || 0) || (b.points || 0) - (a.points || 0)).map((r) => String(r.rosterId));
+    if (!data.weeks[week]) {
+      const prior = data.weeks[week - 1] || rosterIds;
+      data.weeks[week] = [...prior.filter((id) => rosterIds.includes(String(id))), ...rosterIds.filter((id) => !prior.map(String).includes(id))];
+    }
+    return data.weeks[week];
+  }
+  function managerAvatar(roster) {
+    return roster.avatar ? `https://sleepercdn.com/avatars/thumbs/${roster.avatar}` : "";
+  }
+  function leagueMovement(rosterId, index) {
+    const data = rankingState(), previous = data.weeks[data.week - 1];
+    if (!previous) return null;
+    return previous.map(String).indexOf(String(rosterId)) - index;
+  }
+  function renderLeagueRankings() {
+    const sleeper = state.sleeper;
+    if (!sleeper?.rosters?.length) {
+      view.innerHTML = `${fantasyTabs()}<section class="leagueRankEmpty"><div class="tradeHeroMark">SLEEPER LEAGUE POWER RANKINGS</div><h1>Rank your fantasy league.</h1><p>Connect Sleeper to import team names, manager usernames, avatars, and records.</p><button class="tradeAction primary" data-sync-sleeper>Sync Sleeper league</button></section>`;
+      bindFantasyTabs();
+      view.querySelector("[data-sync-sleeper]").onclick = openSleeperSync;
+      return;
+    }
+    const data = rankingState(), ranking = currentLeagueRanking(), rosterMap = Object.fromEntries(sleeper.rosters.map((r) => [String(r.rosterId), r]));
+    view.innerHTML = `${fantasyTabs()}<div class="leagueRankHero"><div><div class="tradeHeroMark">${esc(sleeper.leagueName)}</div><h1>League Rankings</h1><p>Drag every team into order. Rankings save automatically to your account.</p></div><div class="leagueWeekControls"><button class="tradeAction" data-rank-prev ${data.week <= 1 ? "disabled" : ""}>‹ Previous</button><label class="tradeSetting"><span>Ranking week</span><select id="fantasyRankWeek">${Array.from({ length: 18 }, (_, i) => `<option value="${i + 1}">Week ${i + 1}</option>`).join("")}</select></label><button class="tradeAction" data-rank-next ${data.week >= 18 ? "disabled" : ""}>Next ›</button><button class="tradeAction" data-copy-fantasy>Copy previous</button><button class="tradeAction sleeperSync" data-sync-sleeper>↻ Sync league</button><button class="tradeAction primary" data-export-fantasy>↓ Export image</button></div></div><div class="leagueRankLayout"><div class="leagueRankBoard" id="leagueRankBoard">${ranking.map((id, index) => leagueRankRow(rosterMap[String(id)], index)).join("")}</div>${leagueRankSidebar(ranking, rosterMap)}</div>`;
+    bindFantasyTabs();
+    const select = view.querySelector("#fantasyRankWeek");
+    select.value = data.week;
+    select.onchange = () => { data.week = +select.value; currentLeagueRanking(); persist(); render(); };
+    view.querySelector("[data-rank-prev]").onclick = () => { data.week = Math.max(1, data.week - 1); currentLeagueRanking(); persist(); render(); };
+    view.querySelector("[data-rank-next]").onclick = () => { data.week = Math.min(18, data.week + 1); currentLeagueRanking(); persist(); render(); };
+    view.querySelector("[data-copy-fantasy]").onclick = () => { if (data.week === 1) return window.toast?.("Week 1 has no previous ranking"); data.weeks[data.week] = [...(data.weeks[data.week - 1] || ranking)]; persist(); render(); window.toast?.("Previous week copied"); };
+    view.querySelector("[data-sync-sleeper]").onclick = () => refreshSleeperManagers(true);
+    view.querySelector("[data-export-fantasy]").onclick = exportLeagueRankings;
+    view.querySelectorAll("[data-league-note]").forEach((input) => input.oninput = () => { data.notes[`${data.week}:${input.dataset.leagueNote}`] = input.value; persist(); });
+    view.querySelectorAll("[data-league-tag]").forEach((selectTag) => selectTag.onchange = () => { data.tags[`${data.week}:${selectTag.dataset.leagueTag}`] = selectTag.value; persist(); });
+    const featured = view.querySelector("#fantasyTeamWeek"), featuredNote = view.querySelector("#fantasyTeamWeekNote");
+    if (featured) featured.onchange = () => { data.teamWeek[data.week] = featured.value; persist(); render(); };
+    if (featuredNote) featuredNote.oninput = () => { data.teamWeekNotes[data.week] = featuredNote.value; persist(); };
+    bindLeagueRankDrag();
+  }
+  function leagueRankRow(roster, index) {
+    if (!roster) return "";
+    const data = rankingState(), avatar = managerAvatar(roster), initials = (roster.username || roster.name || "M").slice(0, 2).toUpperCase(), record = `${roster.wins || 0}-${roster.losses || 0}${roster.ties ? `-${roster.ties}` : ""}`, movement = leagueMovement(roster.rosterId, index), key = `${data.week}:${roster.rosterId}`, featured = String(data.teamWeek[data.week] || "") === String(roster.rosterId), tags = ["", "🔥 Contender", "🚨 Fraud Watch", "📈 Rising", "📉 Falling", "🩹 Injury Ward", "💀 Cooked"];
+    return `<article class="leagueRankRow ${featured ? "featured" : ""}" draggable="true" data-roster-id="${roster.rosterId}"><div class="leagueRankNumber">${String(index + 1).padStart(2, "0")}</div><div class="managerAvatar">${avatar ? `<img src="${avatar}" alt="">` : `<span>${esc(initials)}</span>`}</div><div class="leagueRankIdentity"><strong>${esc(roster.name)}</strong><span>@${esc(roster.username || "manager")}</span></div><div class="leagueRankExtras"><input data-league-note="${roster.rosterId}" value="${esc(data.notes[key] || "")}" placeholder="Add a note…" aria-label="Note for ${esc(roster.name)}"><select data-league-tag="${roster.rosterId}" aria-label="Tag for ${esc(roster.name)}">${tags.map((tag) => `<option value="${esc(tag)}" ${data.tags[key] === tag ? "selected" : ""}>${esc(tag || "No tag")}</option>`).join("")}</select></div><div class="leagueRecord"><b>${record}</b><span>Record</span></div><div class="leagueMove ${movement > 0 ? "up" : movement < 0 ? "down" : "same"}">${movement > 0 ? `▲ ${movement}` : movement < 0 ? `▼ ${Math.abs(movement)}` : "—"}</div><div class="leagueRankHandle">•••</div></article>`;
+  }
+  function leagueRankSidebar(ranking, rosterMap) {
+    const data = rankingState(), featured = String(data.teamWeek[data.week] || ""), changes = ranking.map((id, index) => ({ id: String(id), d: leagueMovement(id, index) || 0 })).filter((x) => x.d), riser = [...changes].sort((a, b) => b.d - a.d)[0], faller = [...changes].sort((a, b) => a.d - b.d)[0];
+    const mover = (item, type) => item ? `<div class="leagueMover ${type}"><div class="managerAvatar small">${managerAvatar(rosterMap[item.id]) ? `<img src="${managerAvatar(rosterMap[item.id])}" alt="">` : `<span>${esc((rosterMap[item.id]?.username || "M").slice(0, 2).toUpperCase())}</span>`}</div><div><b>${esc(rosterMap[item.id]?.name || "Team")}</b><span>${item.d > 0 ? `▲ ${item.d}` : `▼ ${Math.abs(item.d)}`}</span></div></div>` : '<p class="leagueSideEmpty">No movement yet.</p>';
+    return `<aside class="leagueRankSide"><section><h3>Team of the Week</h3><select id="fantasyTeamWeek"><option value="">Choose a team…</option>${ranking.map((id) => `<option value="${id}" ${featured === String(id) ? "selected" : ""}>${esc(rosterMap[String(id)]?.name || "Team")}</option>`).join("")}</select><textarea id="fantasyTeamWeekNote" placeholder="Why are they team of the week?">${esc(data.teamWeekNotes[data.week] || "")}</textarea></section><section><h3>Biggest Movers</h3>${mover(riser, "riser")}${mover(faller, "faller")}</section></aside>`;
+  }
+  function bindLeagueRankDrag() {
+    const board = view.querySelector("#leagueRankBoard");
+    if (!board) return;
+    let dragged = null;
+    board.addEventListener("dragstart", (e) => { dragged = e.target.closest(".leagueRankRow"); dragged?.classList.add("dragging"); });
+    board.addEventListener("dragover", (e) => { e.preventDefault(); const over = e.target.closest(".leagueRankRow"); board.querySelectorAll(".dragover").forEach((x) => x.classList.remove("dragover")); if (over && over !== dragged) over.classList.add("dragover"); });
+    board.addEventListener("drop", (e) => { e.preventDefault(); const over = e.target.closest(".leagueRankRow"); if (!dragged || !over || dragged === over) return; const ranking = currentLeagueRanking(), from = ranking.indexOf(dragged.dataset.rosterId), to = ranking.indexOf(over.dataset.rosterId); ranking.splice(to, 0, ranking.splice(from, 1)[0]); persist(); render(); });
+    board.addEventListener("dragend", () => { board.querySelectorAll(".leagueRankRow").forEach((x) => x.classList.remove("dragging", "dragover")); });
   }
   function teamCard(t, i, sum) {
     const assets = t.assets.map((a, j) => assetRow(t, a, j)).join("") || '<div class="tradeEmpty">No outgoing assets yet</div>';
@@ -202,7 +285,7 @@
         fetch(`https://api.sleeper.app/v1/league/${leagueId}`).then((r) => r.json()),
         fetch(`https://api.sleeper.app/v1/league/${leagueId}/rosters`).then((r) => r.json()),
         fetch(`https://api.sleeper.app/v1/league/${leagueId}/users`).then((r) => r.json()),
-      ]), names = Object.fromEntries(users.map((u) => [u.user_id, u.metadata?.team_name || u.display_name || u.username || "Manager"])), imported = rosters.map((r) => ({ rosterId: r.roster_id, ownerId: r.owner_id, name: names[r.owner_id] || `Team ${r.roster_id}`, players: r.players || [] }));
+      ]), imported = importSleeperRosters(rosters, users);
       const ppr = +(league.scoring_settings?.rec || 0), superflex = (league.roster_positions || []).some((x) => x === "SUPER_FLEX" || x === "QB" && (league.roster_positions || []).filter((y) => y === "QB").length > 1);
       state.format = league.settings?.type === 2 || league.name?.toLowerCase().includes("dynasty") ? "dynasty" : "redraft";
       state.scoring = ppr >= 1 ? "ppr" : ppr >= 0.5 ? "half" : "standard";
@@ -214,6 +297,58 @@
       render();
       window.toast?.(`${league.name} synced`);
     } catch { window.toast?.("Sleeper league could not sync"); }
+  }
+  function importSleeperRosters(rosters, users) {
+    const managers = Object.fromEntries((users || []).map((user) => [user.user_id, user]));
+    return (rosters || []).map((roster) => {
+      const manager = managers[roster.owner_id] || {}, settings = roster.settings || {};
+      return { rosterId: roster.roster_id, ownerId: roster.owner_id, name: manager.metadata?.team_name || manager.display_name || manager.username || `Team ${roster.roster_id}`, username: manager.username || manager.display_name || "manager", avatar: manager.avatar || "", players: roster.players || [], wins: +settings.wins || 0, losses: +settings.losses || 0, ties: +settings.ties || 0, points: (+settings.fpts || 0) + (+settings.fpts_decimal || 0) / 100 };
+    });
+  }
+  let managerRefreshRunning = false;
+  async function refreshSleeperManagers(showToast = false) {
+    if (!state.sleeper?.leagueId || managerRefreshRunning) return;
+    managerRefreshRunning = true;
+    try {
+      const [rosters, users] = await Promise.all([
+        fetch(`https://api.sleeper.app/v1/league/${state.sleeper.leagueId}/rosters`).then((r) => r.json()),
+        fetch(`https://api.sleeper.app/v1/league/${state.sleeper.leagueId}/users`).then((r) => r.json()),
+      ]);
+      state.sleeper.rosters = importSleeperRosters(rosters, users);
+      persist();
+      if (state.section === "rankings") render();
+      if (showToast) window.toast?.("Sleeper league refreshed");
+    } catch {
+      if (showToast) window.toast?.("Sleeper league could not refresh");
+    } finally { managerRefreshRunning = false; }
+  }
+  async function exportLeagueRankings() {
+    const sleeper = state.sleeper, data = rankingState(), ranking = currentLeagueRanking(), rosterMap = Object.fromEntries(sleeper.rosters.map((r) => [String(r.rosterId), r])), rows = Math.ceil(ranking.length / 2), canvas = document.createElement("canvas"), ctx = canvas.getContext("2d");
+    canvas.width = 1400;
+    canvas.height = Math.max(900, 220 + rows * 105);
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, "#172743"); gradient.addColorStop(.42, "#080d18"); gradient.addColorStop(1, "#03060c");
+    ctx.fillStyle = gradient; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#7f9cff"; ctx.font = "900 22px system-ui"; ctx.fillText(`WEEK ${data.week}`, 55, 58);
+    ctx.fillStyle = "#fff"; ctx.font = "950 48px system-ui"; ctx.fillText("LEAGUE POWER RANKINGS", 55, 112);
+    ctx.fillStyle = "#8997ac"; ctx.font = "700 18px system-ui"; ctx.fillText(sleeper.leagueName.toUpperCase(), 57, 145);
+    ctx.textAlign = "right"; ctx.fillStyle = "#72819a"; ctx.font = "850 17px system-ui"; ctx.fillText("LEDGE FANTASY", 1345, 72); ctx.textAlign = "left";
+    const avatars = {};
+    await Promise.all(ranking.map((id) => new Promise((resolve) => { const roster = rosterMap[String(id)], src = managerAvatar(roster); if (!src) return resolve(); const image = new Image(); image.crossOrigin = "anonymous"; image.onload = () => { avatars[String(id)] = image; resolve(); }; image.onerror = resolve; image.src = src; })));
+    ranking.forEach((id, index) => {
+      const roster = rosterMap[String(id)], col = Math.floor(index / rows), row = index % rows, x = 55 + col * 675, y = 185 + row * 105, featured = String(data.teamWeek[data.week] || "") === String(id), key = `${data.week}:${id}`, movement = leagueMovement(id, index), note = data.notes[key] || "", tag = data.tags[key] || "";
+      ctx.fillStyle = featured ? "#7b5814" : "#101827"; ctx.beginPath(); ctx.roundRect(x, y, 620, 88, 16); ctx.fill();
+      ctx.strokeStyle = featured ? "#ffe19a" : "#26344a"; ctx.lineWidth = featured ? 3 : 1.5; ctx.stroke();
+      ctx.fillStyle = featured ? "#ffd978" : "#65738a"; ctx.font = "950 24px system-ui"; ctx.textAlign = "center"; ctx.fillText(String(index + 1).padStart(2, "0"), x + 34, y + 53);
+      if (avatars[String(id)]) { ctx.save(); ctx.beginPath(); ctx.arc(x + 87, y + 44, 29, 0, Math.PI * 2); ctx.clip(); ctx.drawImage(avatars[String(id)], x + 58, y + 15, 58, 58); ctx.restore(); }
+      else { ctx.fillStyle = "#263b5e"; ctx.beginPath(); ctx.arc(x + 87, y + 44, 29, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#fff"; ctx.font = "900 13px system-ui"; ctx.fillText((roster.username || "M").slice(0, 2).toUpperCase(), x + 87, y + 49); }
+      ctx.textAlign = "left"; ctx.fillStyle = "#fff"; ctx.font = "900 20px system-ui"; ctx.fillText(roster.name.slice(0, 27), x + 128, y + 34);
+      ctx.fillStyle = "#98a7bc"; ctx.font = "750 13px system-ui"; ctx.fillText(`@${roster.username}  •  ${roster.wins}-${roster.losses}${roster.ties ? `-${roster.ties}` : ""}`, x + 128, y + 55);
+      if (tag || note) { ctx.fillStyle = tag ? "#ffc75b" : "#78879d"; ctx.font = "700 12px system-ui"; ctx.fillText(`${tag}${tag && note ? "  •  " : ""}${note}`.slice(0, 48), x + 128, y + 75); }
+      ctx.textAlign = "right"; ctx.fillStyle = movement > 0 ? "#31d18b" : movement < 0 ? "#ff5d6c" : "#657187"; ctx.font = "950 17px system-ui"; ctx.fillText(movement > 0 ? `▲ ${movement}` : movement < 0 ? `▼ ${Math.abs(movement)}` : "—", x + 595, y + 31); ctx.textAlign = "left";
+      if (featured) { ctx.fillStyle = "#fff1bf"; ctx.font = "950 15px system-ui"; ctx.fillText("★", x + 578, y + 72); }
+    });
+    canvas.toBlob((blob) => { const url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = `ledge-${sleeper.leagueName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-week-${data.week}.png`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); window.toast?.("League ranking image downloaded"); }, "image/png");
   }
   async function loadPlayers() {
     try {
@@ -227,7 +362,7 @@
     } catch {}
     render();
   }
-  window.initTradeAnalyzer = () => { if (initialized) return; initialized = true; render(); loadPlayers(); };
+  window.initTradeAnalyzer = () => { if (initialized) return; initialized = true; render(); loadPlayers(); if (state.sleeper?.leagueId && state.sleeper.rosters?.some((r) => !r.username)) refreshSleeperManagers(); };
   if (location.hash.includes("trade=")) setTimeout(() => document.querySelector('[data-global-view="fantasy"]')?.click(), 0);
   if (!view.hidden) window.initTradeAnalyzer();
 })();
