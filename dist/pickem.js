@@ -65,6 +65,8 @@
   };
   ps.seasonPrediction.picks ||= {};
   ps.seasonPrediction.baseline ||= {};
+  ps.seasonPrediction.playoffLocked ||= false;
+  ps.seasonPrediction.playoffLockedAt ||= null;
   if (["standings", "playoffs", "actual"].includes(ps.section))
     ps.section = "picks";
   const gameDetail = document.createElement("dialog");
@@ -263,14 +265,16 @@
         ? Math.round((correctUpsets / gradedUpsets.length) * 100)
         : 0;
     pickem.innerHTML = `<div class="pickHead"><div><div class="eyebrow">NFL predictions</div><h1>NFL Pick’em</h1><p>Make weekly picks, lock a full-season prediction, and measure both against the real results.</p></div><div class="pickControls"><button class="btn" id="pickPrev">‹ Previous week</button><label class="selectWrap"><span>Week / round</span><select id="pickWeek"></select></label><button class="btn" id="pickNext">Next week ›</button><button class="btn" id="syncScores">↻ Sync results</button></div></div>
-<div class="pickTabs"><button class="pickSubTab" data-section="picks">My Picks</button><button class="pickSubTab" data-section="season">Season Predictions</button><button class="pickSubTab" data-section="actualStandings">Actual Standings</button></div>
+<div class="pickTabs"><button class="pickSubTab" data-section="picks">My Picks</button><button class="pickSubTab" data-section="season">Season Predictions</button><button class="pickSubTab" data-section="playoffPredictor">Playoff Predictor</button><button class="pickSubTab" data-section="actualStandings">Actual Standings</button></div>
 <div class="pickSummary"><div class="metric"><b>${totalPicks}</b><span>Games picked</span></div><div class="metric"><b>${done.length}</b><span>Graded picks</span></div><div class="metric"><b>${correct}</b><span>Correct</span></div><div class="metric accuracyMetric ${accuracyClass}"><b>${accuracy}%</b><span>Accuracy</span></div></div>
 <div class="upsetSummary"><div class="upsetTitle"><b>⚡ Upset tracker</b><span>A pick counts when you choose the listed moneyline underdog.</span></div><div class="upsetStat"><b>${upsetPicks.length}</b><span>Upsets picked</span></div><div class="upsetStat"><b>${correctUpsets}</b><span>Upsets hit</span></div><div class="upsetStat"><b>${upsetAccuracy}%</b><span>Upset accuracy</span></div></div>
 <div id="pickContent"></div><div class="syncState">${ps.error || "Final scores update automatically whenever you sync or reopen this tab."}</div>`;
     const sel = pickem.querySelector("#pickWeek"),
       prev = pickem.querySelector("#pickPrev"),
       next = pickem.querySelector("#pickNext");
-    for (let w = 1; w <= 22; w++)
+    const firstWeek = ps.section === "playoffPredictor" ? 19 : 1,
+      lastWeek = ps.section === "season" ? 18 : 22;
+    for (let w = firstWeek; w <= lastWeek; w++)
       sel.add(
         new Option(
           w <= 18
@@ -286,11 +290,11 @@
         ),
       );
     function updateWeekNav() {
-      prev.disabled = ps.week === 1;
-      next.disabled = ps.week === 22;
+      prev.disabled = ps.week === firstWeek;
+      next.disabled = ps.week === lastWeek;
     }
     function changeWeek(step) {
-      ps.week = Math.max(1, Math.min(22, ps.week + step));
+      ps.week = Math.max(firstWeek, Math.min(lastWeek, ps.week + step));
       savePickem();
       renderPickem();
     }
@@ -313,11 +317,10 @@
       b.classList.toggle("active", b.dataset.section === ps.section);
       b.onclick = () => {
         ps.section = b.dataset.section;
+        if (ps.section === "season" && ps.week > 18) ps.week = 18;
+        if (ps.section === "playoffPredictor" && ps.week < 19) ps.week = 19;
         savePickem();
-        pickem
-          .querySelectorAll(".pickSubTab")
-          .forEach((x) => x.classList.toggle("active", x === b));
-        renderSection();
+        renderPickem();
       };
     });
     renderSection();
@@ -326,6 +329,7 @@
     const c = pickem.querySelector("#pickContent");
     if (!c) return;
     if (ps.section === "season") return renderSeasonPrediction(c);
+    if (ps.section === "playoffPredictor") return renderPlayoffPredictor(c);
     if (ps.section === "actualStandings") return renderActualStandings(c);
     renderPicks(c);
   }
@@ -341,10 +345,12 @@
   function seasonState() {
     ps.seasonPrediction ||= {
       picks: {}, baseline: {}, locked: false, lockedAt: null,
-      view: "week", team: "den",
+      playoffLocked: false, playoffLockedAt: null, view: "week", team: "den",
     };
     ps.seasonPrediction.picks ||= {};
     ps.seasonPrediction.baseline ||= {};
+    ps.seasonPrediction.playoffLocked ||= false;
+    ps.seasonPrediction.playoffLockedAt ||= null;
     return ps.seasonPrediction;
   }
   function prepareSeasonPrediction() {
@@ -434,8 +440,9 @@
     const sp = seasonState(), actual = actualForSeasonGame(source), pick = sp.picks[source.id],
       baseline = !!sp.baseline[source.id], live = actual.statusState === "in",
       completed = !!actual.completed, winner = actual.winner,
-      real = !source.seasonPrediction, started = real && (live || completed || (source.date && Date.now() >= new Date(source.date).getTime())),
-      locked = sp.locked || started,
+      real = !source.seasonPrediction, actualScheduled = actual !== source,
+      started = (real || actualScheduled) && (live || completed || (actual.date && Date.now() >= new Date(actual.date).getTime())),
+      locked = source.seasonPrediction ? sp.playoffLocked || started : sp.locked || started,
       r = actualRecords(), rec = (team) => `${r[team]?.w || 0}-${r[team]?.l || 0}${r[team]?.t ? "-" + r[team].t : ""}`,
       scoreClass = (team) => {
         const side = actual.home === team ? "home" : "away",
@@ -451,9 +458,10 @@
           : `<span class="scoreBox" hidden></span>`;
       },
       grade = (team) => completed && pick === team && !baseline ? (winner === team ? "correctPick" : "wrongPick") : "",
-      dateLabel = source.date ? new Date(source.date).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : source.status,
+      dateLabel = actual.date ? new Date(actual.date).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : source.status,
       realId = actual.id && !String(actual.id).startsWith("season-") ? actual.id : "";
-    return `<article class="gameCard seasonGameCard ${baseline ? "seasonBaseline" : ""}" ${realId ? `data-game-id="${realId}"` : ""}><div class="gameMeta"><span>${dateLabel}</span><span>${live ? '<span class="liveBadge"><i class="liveDot"></i>LIVE</span>' : completed ? actual.status || "FINAL" : sp.locked ? "SEASON LOCKED" : "PREDICTION OPEN"}</span></div>${real ? oddsBar(source) : ""}<div class="matchup">
+    const predictionLocked = source.seasonPrediction ? sp.playoffLocked : sp.locked;
+    return `<article class="gameCard seasonGameCard ${baseline ? "seasonBaseline" : ""}" ${realId ? `data-game-id="${realId}"` : ""}><div class="gameMeta"><span>${dateLabel}</span><span>${live ? '<span class="liveBadge"><i class="liveDot"></i>LIVE</span>' : completed ? actual.status || "FINAL" : predictionLocked ? "PREDICTION LOCKED" : "PREDICTION OPEN"}</span></div>${real ? oddsBar(source) : ""}<div class="matchup">
 <button class="pickTeam ${pick === source.away ? "selected" : ""} ${grade(source.away)}" data-season-game="${source.id}" data-team="${source.away}" ${locked ? "disabled" : ""}><img src="${logo(source.away)}"><span class="pickIdentity"><strong>${shortName(source.away)}</strong><small>Away</small></span><span class="teamRecord">${rec(source.away)}</span>${score(source.away)}</button><div class="vs">AT</div>
 <button class="pickTeam ${pick === source.home ? "selected" : ""} ${grade(source.home)}" data-season-game="${source.id}" data-team="${source.home}" ${locked ? "disabled" : ""}>${score(source.home)}<span class="teamRecord">${rec(source.home)}</span><span class="pickIdentity"><strong>${shortName(source.home)}</strong><small>Home</small></span><img src="${logo(source.home)}"></button></div>
 ${baseline ? '<div class="seasonResultNote">Result imported — not counted toward your prediction accuracy</div>' : completed && pick ? `<div class="resultBadge ${pick === winner ? "correct" : "wrong"}">${pick === winner ? "✓ Season prediction correct" : "✕ Season prediction missed"}</div>` : ""}</article>`;
@@ -471,46 +479,73 @@ ${baseline ? '<div class="seasonResultNote">Result imported — not counted towa
   function seasonPredictionStats() {
     const sp = seasonState(), regular = Object.values(ps.games).filter((g) => g.seasonType === 2),
       predicted = regular.filter((g) => sp.picks[g.id] && !sp.baseline[g.id]),
-      playoff = [19, 20, 21, 22].flatMap(seasonRound).filter((g) => sp.picks[g.id]),
-      gradedRegular = predicted.filter((g) => g.completed && g.winner),
-      gradedPlayoff = playoff.map((g) => ({ prediction: g, actual: actualForSeasonGame(g) }))
+      graded = predicted.filter((g) => g.completed && g.winner),
+      correct = graded.filter((g) => sp.picks[g.id] === g.winner).length;
+    return { predicted: predicted.length, graded: graded.length, correct, accuracy: graded.length ? Math.round(correct / graded.length * 100) : 0 };
+  }
+  function playoffPredictionStats() {
+    const sp = seasonState(), playoff = [19, 20, 21, 22].flatMap(seasonRound).filter((g) => sp.picks[g.id]),
+      graded = playoff.map((g) => ({ prediction: g, actual: actualForSeasonGame(g) }))
         .filter((x) => x.actual.completed && x.actual.winner),
-      correct = gradedRegular.filter((g) => sp.picks[g.id] === g.winner).length +
-        gradedPlayoff.filter((x) => sp.picks[x.prediction.id] === x.actual.winner).length,
-      graded = gradedRegular.length + gradedPlayoff.length;
-    return { predicted: predicted.length + playoff.length, graded, correct, accuracy: graded ? Math.round(correct / graded * 100) : 0 };
+      correct = graded.filter((x) => sp.picks[x.prediction.id] === x.actual.winner).length;
+    return { picked: playoff.length, graded: graded.length, correct, accuracy: graded.length ? Math.round(correct / graded.length * 100) : 0 };
   }
   function renderSeasonPrediction(c) {
     prepareSeasonPrediction();
     const sp = seasonState(), stats = seasonPredictionStats(), regular = Object.values(ps.games).filter((g) => g.seasonType === 2),
-      weekGamesList = ps.week <= 18 ? regular.filter((g) => g.week === ps.week).sort((a, b) => new Date(a.date) - new Date(b.date)) : seasonRound(ps.week),
-      teamGames = [...regular, ...[19, 20, 21, 22].flatMap(seasonRound)]
+      weekGamesList = regular.filter((g) => g.week === ps.week).sort((a, b) => new Date(a.date) - new Date(b.date)),
+      teamGames = regular
         .filter((g) => g.home === sp.team || g.away === sp.team)
         .sort((a, b) => (a.week || 0) - (b.week || 0) || new Date(a.date || 0) - new Date(b.date || 0)),
       shown = sp.view === "team" ? teamGames : weekGamesList,
       selectedFuture = regular.filter((g) => sp.picks[g.id] && !sp.baseline[g.id]).length,
       totalFuture = regular.filter((g) => !sp.baseline[g.id]).length;
-    c.innerHTML = `<section class="seasonPredictionHead"><div><div class="seasonStatus ${sp.locked ? "locked" : "draft"}">${sp.locked ? "✓ LOCKED PREDICTION" : "DRAFT — EDITABLE"}</div><h2>Full-Season Prediction</h2><p>Past results are filled automatically. Predict every future game, complete the playoff bracket, then lock it permanently.</p></div>${sp.locked ? `<div class="seasonLockedAt">Locked ${new Date(sp.lockedAt).toLocaleDateString()}</div>` : '<button class="btn seasonLockButton" id="lockSeasonPrediction">Lock season prediction</button>'}</section>
-<div class="seasonModeBar"><div class="seasonModeToggle"><button class="${sp.view === "week" ? "active" : ""}" data-season-view="week">Week by week</button><button class="${sp.view === "team" ? "active" : ""}" data-season-view="team">Team by team</button></div>${sp.view === "team" ? `<label class="seasonTeamSelect"><span>Team</span><select id="seasonTeam">${teams.map((t) => `<option value="${t[0]}" ${sp.team === t[0] ? "selected" : ""}>${t[1]} ${t[2]}</option>`).join("")}</select></label>` : `<div class="seasonRoundLabel">${ps.week <= 18 ? `Week ${ps.week}` : ps.week === 19 ? "Wild Card" : ps.week === 20 ? "Divisional" : ps.week === 21 ? "Conference Championships" : "Super Bowl"}</div>`}</div>
+    c.innerHTML = `<section class="seasonPredictionHead"><div><div class="seasonStatus ${sp.locked ? "locked" : "draft"}">${sp.locked ? "✓ LOCKED PREDICTION" : "DRAFT — EDITABLE"}</div><h2>Regular-Season Prediction</h2><p>Past results are filled automatically. Predict every remaining regular-season game, review the standings it creates, then lock it permanently.</p></div>${sp.locked ? `<div class="seasonLockedAt">Locked ${new Date(sp.lockedAt).toLocaleDateString()}</div>` : '<button class="btn seasonLockButton" id="lockSeasonPrediction">Lock season prediction</button>'}</section>
+<div class="seasonModeBar"><div class="seasonModeToggle"><button class="${sp.view === "week" ? "active" : ""}" data-season-view="week">Week by week</button><button class="${sp.view === "team" ? "active" : ""}" data-season-view="team">Team by team</button><button class="${sp.view === "standings" ? "active" : ""}" data-season-view="standings">Predicted standings</button></div>${sp.view === "team" ? `<label class="seasonTeamSelect"><span>Team</span><select id="seasonTeam">${teams.map((t) => `<option value="${t[0]}" ${sp.team === t[0] ? "selected" : ""}>${t[1]} ${t[2]}</option>`).join("")}</select></label>` : sp.view === "week" ? `<div class="seasonRoundLabel">Week ${ps.week}</div>` : '<div class="seasonRoundLabel">Divisions + playoff seeds</div>'}</div>
 <div class="seasonPredictionSummary"><div><b>${selectedFuture}/${Math.max(0, totalFuture)}</b><span>Future games picked</span></div><div><b>${stats.graded}</b><span>Predictions graded</span></div><div><b>${stats.correct}</b><span>Correct</span></div><div><b>${stats.accuracy}%</b><span>Accuracy</span></div></div>
-<div class="gameList fullGameList">${shown.length ? shown.map(seasonGameCard).join("") : '<div class="emptyPick">Finish the previous playoff round to unlock these matchups.</div>'}</div>`;
+${sp.view === "standings" ? seasonStandingsMarkup() : `<div class="gameList fullGameList">${shown.length ? shown.map(seasonGameCard).join("") : '<div class="emptyPick">No games are available in this view.</div>'}</div>`}`;
     c.querySelectorAll("[data-season-view]").forEach((button) => button.onclick = () => { sp.view = button.dataset.seasonView; savePickem(); renderSection(); });
     const teamSelect = c.querySelector("#seasonTeam");
     if (teamSelect) teamSelect.onchange = () => { sp.team = teamSelect.value; savePickem(); renderSection(); };
     c.querySelector("#lockSeasonPrediction")?.addEventListener("click", () => {
-      const missingRegular = regular.filter((g) => !sp.picks[g.id]).length,
-        playoff = [19, 20, 21, 22].flatMap(seasonRound),
-        missingPlayoffs = playoff.filter((g) => !sp.picks[g.id]).length;
+      const missingRegular = regular.filter((g) => !sp.picks[g.id]).length;
       if (missingRegular)
         return window.toast?.(`Finish the regular season first — ${missingRegular} pick${missingRegular === 1 ? "" : "s"} still missing.`);
-      if (missingPlayoffs || playoff.length < 13)
-        return window.toast?.("Finish every playoff round through the Super Bowl before locking.");
-      if (!confirm("Lock this entire season prediction? This cannot be undone or edited later.")) return;
+      if (!confirm("Lock this regular-season prediction? This cannot be undone or edited later.")) return;
       sp.locked = true; sp.lockedAt = new Date().toISOString(); savePickem(); renderSection(); window.toast?.("Season prediction locked");
     });
     c.onclick = (e) => {
       const button = e.target.closest("[data-season-game]");
       if (button && !button.disabled && !sp.locked) {
+        sp.picks[button.dataset.seasonGame] = button.dataset.team;
+        cleanSeasonPlayoffPicks(); savePickem(); renderSection(); return;
+      }
+      const card = e.target.closest("[data-game-id]");
+      if (card && !button) openGameDetail(card.dataset.gameId);
+    };
+    bindTeamLinks(c);
+  }
+  function seasonStandingsMarkup() {
+    const { r, out } = seasonSeeds(), record = (t) => `${r[t].w}-${r[t].l}`;
+    return `<div class="seasonStandingsIntro"><div><span>YOUR PROJECTED FINISH</span><b>Divisional Standings</b></div><p>Updates instantly as you change regular-season predictions.</p></div><div class="divisionGrid">${Object.entries(divisions).map(([name, list]) => `<section class="division seasonDivision"><h3>${name}</h3>${sortedTeams(list, r).map((team, i) => `<div class="standRow" data-team-code="${team}" tabindex="0" role="button"><b>${i + 1}</b><div class="teamLine"><img src="${logo(team)}">${teamName(team)}${i === 0 ? '<span class="divisionLeader">DIV</span>' : ""}</div><span class="record">${record(team)}</span></div>`).join("")}</section>`).join("")}</div><div class="seasonStandingsIntro seedIntro"><div><span>YOUR PROJECTED FIELD</span><b>Playoff Seeds</b></div><p>Division winners take seeds 1–4; the next three records are wild cards.</p></div><div class="conferenceGrid">${["AFC", "NFC"].map((conf) => `<section class="conference seasonConference"><h2>${conf}</h2>${out[conf].map((team, i) => `<div class="seedRow" data-team-code="${team}" tabindex="0" role="button"><b>${i + 1}</b><div class="teamLine"><img src="${logo(team)}">${teamName(team)}<span class="divisionLeader">${i < 4 ? "DIV" : "WC"}</span></div><span class="record">${record(team)}</span></div>`).join("")}</section>`).join("")}</div>`;
+  }
+  function renderPlayoffPredictor(c) {
+    const sp = seasonState(), stats = playoffPredictionStats(), { out } = seasonSeeds(), round = Math.max(19, Math.min(22, ps.week)), games = seasonRound(round),
+      roundName = round === 19 ? "Wild Card" : round === 20 ? "Divisional" : round === 21 ? "Conference Championships" : "Super Bowl",
+      champion = sp.picks["season-super-bowl"];
+    c.innerHTML = `<section class="seasonPredictionHead playoffPredictorHead"><div><div class="seasonStatus ${sp.playoffLocked ? "locked" : "draft"}">${sp.playoffLocked ? "✓ BRACKET LOCKED" : "SEASON-BASED BRACKET"}</div><h2>Playoff Predictor</h2><p>Your matchups and home seeds come directly from your locked regular-season prediction.</p></div>${sp.playoffLocked ? `<div class="seasonLockedAt">Locked ${new Date(sp.playoffLockedAt).toLocaleDateString()}</div>` : sp.locked ? '<button class="btn seasonLockButton" id="lockPlayoffPrediction">Lock playoff bracket</button>' : ""}</section>
+<div class="playoffSeedSource"><div class="playoffSeedTitle"><span>FIELD SOURCE</span><b>Your Season Prediction</b></div>${["AFC", "NFC"].map((conf) => `<div class="playoffSeedConference"><strong>${conf}</strong>${out[conf].map((team, i) => `<span title="${esc(teamName(team))}"><i>${i + 1}</i><img src="${logo(team)}"></span>`).join("")}</div>`).join("")}</div>
+${!sp.locked ? `<div class="playoffGate"><div class="playoffGateIcon">🔒</div><h3>Lock the regular season first</h3><p>Finish your Season Predictions and lock them. That freezes the standings and creates the official field for this bracket.</p><button class="btn" id="goSeasonStandings">View season standings</button></div>` : `<div class="seasonPredictionSummary playoffSummary"><div><b>${stats.picked}/13</b><span>Playoff games picked</span></div><div><b>${stats.graded}</b><span>Predictions graded</span></div><div><b>${stats.correct}</b><span>Correct</span></div><div><b>${stats.accuracy}%</b><span>Accuracy</span></div></div>${champion ? `<div class="predictedChampion"><span>YOUR SUPER BOWL PICK</span><img src="${logo(champion)}"><b>${teamName(champion)}</b></div>` : ""}<div class="seasonStandingsIntro playoffRoundIntro"><div><span>ROUND</span><b>${roundName}</b></div><p>${games.length ? "Choose who advances. The next round builds automatically." : "Complete the previous round to create these matchups."}</p></div><div class="gameList fullGameList">${games.length ? games.map(seasonGameCard).join("") : '<div class="emptyPick">Complete the previous playoff round to unlock these matchups.</div>'}</div>`}`;
+    c.querySelector("#goSeasonStandings")?.addEventListener("click", () => { ps.section = "season"; ps.week = 18; sp.view = "standings"; savePickem(); renderPickem(); });
+    c.querySelector("#lockPlayoffPrediction")?.addEventListener("click", () => {
+      const all = [19, 20, 21, 22].flatMap(seasonRound), missing = all.filter((g) => !sp.picks[g.id]).length;
+      if (all.length < 13 || missing) return window.toast?.("Complete every playoff round through the Super Bowl before locking.");
+      if (!confirm("Lock this playoff prediction? This cannot be undone or edited later.")) return;
+      sp.playoffLocked = true; sp.playoffLockedAt = new Date().toISOString(); savePickem(); renderSection(); window.toast?.("Playoff bracket locked");
+    });
+    c.onclick = (e) => {
+      const button = e.target.closest("[data-season-game]");
+      if (button && !button.disabled && sp.locked && !sp.playoffLocked) {
         sp.picks[button.dataset.seasonGame] = button.dataset.team;
         cleanSeasonPlayoffPicks(); savePickem(); renderSection(); return;
       }
