@@ -24,14 +24,18 @@
   }));
   let players = FALLBACK,
     initialized = false,
-    state = normalize(decodeTrade() || window.store?.tradeAnalyzer || {});
+    state = normalize(decodeTrade() || window.store?.tradeAnalyzer || {}),
+    gmConnections = null,
+    gmSnapshot = null,
+    gmLoading = false;
+  const SLEEPER_SNAPSHOT_URL = "https://pdhrifgwjuuafhajypiw.supabase.co/functions/v1/sleeper-snapshot";
 
   function makeTeam(n) {
     return { id: crypto.randomUUID?.() || String(Date.now() + n), name: `Team ${n}`, assets: [] };
   }
   function normalize(s) {
     const teams = Array.isArray(s.teams) && s.teams.length >= 2 ? s.teams : [makeTeam(1), makeTeam(2)];
-    return { format: s.format || "redraft", scoring: s.scoring || "ppr", qb: s.qb || "1qb", teams: teams.slice(0, 6), saved: Array.isArray(s.saved) ? s.saved : [], sleeper: s.sleeper || null, section: s.section || "trades", leagueRankings: s.leagueRankings || { week: window.store?.week || 1, weeks: {} } };
+    return { format: s.format || "redraft", scoring: s.scoring || "ppr", qb: s.qb || "1qb", teams: teams.slice(0, 6), saved: Array.isArray(s.saved) ? s.saved : [], sleeper: s.sleeper || null, section: s.section === "rankings" ? "frontoffice" : (s.section || "trades"), activeGmConnection: s.activeGmConnection || null };
   }
   function esc(v) {
     return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -80,38 +84,188 @@
   }
   function totals() {
     const out = {};
-    state.teams.forEach((t) => (out[t.id] = { sent: 0, received: 0, risks: [], pieces: 0 }));
+    state.teams.forEach((t) => (out[t.id] = { sent: 0, received: 0, risks: [], pieces: 0, incoming: [], outgoing: [] }));
     state.teams.forEach((t) => t.assets.forEach((a) => {
       const v = a.type === "faab" ? Math.round((+a.amount || 0) * 0.055) : value(assetPlayer(a));
       out[t.id].sent += v;
+      if (a.type === "player") out[t.id].outgoing.push(a.playerId);
       if (out[a.to]) {
         out[a.to].received += v;
         out[a.to].pieces++;
+        if (a.type === "player") out[a.to].incoming.push(a.playerId);
         if (a.type === "player" && assetPlayer(a).injury_status) out[a.to].risks.push(`${assetPlayer(a).first_name} ${assetPlayer(a).last_name} (${assetPlayer(a).injury_status})`);
       }
     }));
     return out;
   }
+  function eligible(player, slot) {
+    const position = player.position || "";
+    if (slot === "FLEX") return ["RB", "WR", "TE"].includes(position);
+    if (slot === "SUPER_FLEX") return ["QB", "RB", "WR", "TE"].includes(position);
+    if (slot === "REC_FLEX") return ["WR", "TE"].includes(position);
+    return position === slot;
+  }
+  function lineupValue(ids) {
+    const ignored = new Set(["BN", "IR", "TAXI", "K", "DEF"]);
+    const slots = (state.sleeper?.rosterPositions || ["QB", "RB", "RB", "WR", "WR", "TE", "FLEX"]).filter((slot) => !ignored.has(slot)).sort((a, b) => Number(a.includes("FLEX")) - Number(b.includes("FLEX")));
+    const pool = ids.map((id) => players.find((player) => String(player.player_id) === String(id))).filter(Boolean), used = new Set();
+    return slots.reduce((score, slot) => { const best = pool.filter((player) => !used.has(player.player_id) && eligible(player, slot)).sort((a, b) => value(b) - value(a))[0]; if (!best) return score; used.add(best.player_id); return score + value(best); }, 0);
+  }
+  function rosterImpact(team, ledger) {
+    const roster = state.sleeper?.rosters?.find((row) => String(row.rosterId) === String(team.rosterId));
+    const market = ledger.received - ledger.sent;
+    if (!roster) return { market, lineup: 0, depth: ledger.incoming.length - ledger.outgoing.length, score: market, summary: "Connect this side to a Sleeper roster for lineup and depth analysis." };
+    const beforeIds = [...(roster.players || [])].map(String), outgoing = new Set(ledger.outgoing.map(String)), afterIds = [...beforeIds.filter((id) => !outgoing.has(id)), ...ledger.incoming.map(String)];
+    const lineup = lineupValue(afterIds) - lineupValue(beforeIds), depth = ledger.incoming.length - ledger.outgoing.length;
+    const incomingPlayers = ledger.incoming.map((id) => players.find((player) => String(player.player_id) === String(id))).filter(Boolean), risk = incomingPlayers.filter((player) => player.injury_status).length;
+    const positionCounts = beforeIds.map((id) => players.find((player) => String(player.player_id) === id)?.position).filter(Boolean).reduce((map, position) => ((map[position] = (map[position] || 0) + 1), map), {});
+    const fits = [...new Set(incomingPlayers.filter((player) => (positionCounts[player.position] || 0) <= (player.position === "QB" || player.position === "TE" ? 1 : 3)).map((player) => player.position))];
+    const score = market + lineup * .7 + depth * 2 - risk * 3;
+    const notes = [];
+    notes.push(lineup > 3 ? `Raises the best starting lineup by ${lineup} points of roster value.` : lineup < -3 ? `Weakens the best starting lineup by ${Math.abs(lineup)} points of roster value.` : "Does not materially change the best starting lineup.");
+    if (fits.length) notes.push(`Addresses thin ${fits.join("/")} depth.`);
+    if (depth <= -2) notes.push("Creates a meaningful depth squeeze.");
+    if (risk) notes.push(`${risk} incoming asset${risk === 1 ? " has" : "s have"} a current injury designation.`);
+    return { market, lineup, depth, score: Math.round(score), summary: notes.join(" ") };
+  }
   function render() {
-    if (state.section === "rankings") return renderLeagueRankings();
-    const total = totals(), nets = state.teams.map((t) => total[t.id].received - total[t.id].sent), spread = Math.max(...nets) - Math.min(...nets), fair = Math.max(0, Math.round(100 - spread * 2.25)), winner = Math.max(...nets), cols = Math.min(4, state.teams.length);
+    if (state.section === "frontoffice") return renderFrontOffice();
+    const total = totals(), impacts = state.teams.map((team) => rosterImpact(team, total[team.id])), scores = impacts.map((impact) => impact.score), spread = Math.max(...scores) - Math.min(...scores), fair = Math.max(0, Math.round(100 - spread * 1.8)), winner = Math.max(...scores), cols = Math.min(4, state.teams.length);
     view.innerHTML = `${fantasyTabs()}<div class="tradeHero"><div><div class="tradeHeroMark">LEDGE FANTASY LAB</div><h1>Trade Analyzer</h1><p>Build two-team deals or full multi-team chaos. Every side gets graded.</p></div><button class="tradeAction primary" data-new-trade>New trade</button></div>
       <div class="tradeSettings"><label class="tradeSetting"><span>League</span><select data-setting="format"><option value="redraft">Redraft</option><option value="dynasty">Dynasty</option></select></label><label class="tradeSetting"><span>Scoring</span><select data-setting="scoring"><option value="ppr">PPR</option><option value="half">Half-PPR</option><option value="standard">Standard</option></select></label><label class="tradeSetting"><span>Quarterbacks</span><select data-setting="qb"><option value="1qb">1QB</option><option value="superflex">Superflex / 2QB</option></select></label><button class="tradeAction sleeperSync" data-sync-sleeper>${state.sleeper?.leagueName ? `✓ ${esc(state.sleeper.leagueName)}` : "Sync Sleeper"}</button><button class="tradeAction" data-add-team ${state.teams.length >= 6 ? "disabled" : ""}>＋ Add team</button><button class="tradeAction" data-save-trade>Save</button><button class="tradeAction" data-share-trade>Share link</button><button class="tradeAction" data-post-trade>Post to feed</button></div>
-      <div class="tradeBoard" style="--trade-cols:${cols}">${state.teams.map((t, i) => teamCard(t, i, total[t.id])).join("")}</div>${analysis(total, nets, fair, winner)}${savedList()}`;
+      <div class="tradeBoard" style="--trade-cols:${cols}">${state.teams.map((t, i) => teamCard(t, i, total[t.id])).join("")}</div>${analysis(total, impacts, fair, winner)}${savedList()}`;
     view.querySelectorAll("[data-setting]").forEach((s) => { s.value = state[s.dataset.setting]; s.onchange = () => { state[s.dataset.setting] = s.value; persist(); render(); }; });
     bindFantasyTabs();
     bind();
   }
   function fantasyTabs() {
-    return `<nav class="fantasyTabs" aria-label="Fantasy tools"><button class="fantasyTab ${state.section === "trades" ? "active" : ""}" data-fantasy-section="trades">Trade Analyzer</button><button class="fantasyTab ${state.section === "rankings" ? "active" : ""}" data-fantasy-section="rankings">League Rankings</button></nav>`;
+    return `<nav class="fantasyTabs" aria-label="Fantasy tools"><button class="fantasyTab ${state.section === "frontoffice" ? "active" : ""}" data-fantasy-section="frontoffice">Front Offices</button><button class="fantasyTab ${state.section === "trades" ? "active" : ""}" data-fantasy-section="trades">Trade Lab</button></nav>`;
   }
   function bindFantasyTabs() {
     view.querySelectorAll("[data-fantasy-section]").forEach((button) => button.onclick = () => {
       state.section = button.dataset.fantasySection;
       persist();
       render();
-      if (state.section === "rankings") refreshSleeperManagers();
     });
+  }
+
+  function account() { return window.ledgeAccount; }
+  async function loadGmConnections(force = false) {
+    if (gmLoading || (gmConnections && !force)) return;
+    if (!account()?.session) { gmConnections = []; return render(); }
+    gmLoading = true;
+    try {
+      const { data, error } = await account().sb.from("fantasy_connections").select("id,label,sleeper_username,league_id,roster_id,season,created_at").order("created_at");
+      if (error) throw error;
+      gmConnections = data || [];
+      if (!state.activeGmConnection || !gmConnections.some((item) => item.id === state.activeGmConnection)) state.activeGmConnection = gmConnections[0]?.id || null;
+      persist();
+      await loadGmSnapshot();
+    } catch (error) { window.toast?.(error.message || "Could not load Sleeper teams"); }
+    finally { gmLoading = false; render(); }
+  }
+  async function loadGmSnapshot() {
+    const active = gmConnections?.find((item) => item.id === state.activeGmConnection) || gmConnections?.[0];
+    if (!active) { gmSnapshot = null; return; }
+    const sameLeague = gmConnections.filter((item) => item.league_id === active.league_id);
+    const url = `${SLEEPER_SNAPSHOT_URL}?league=${encodeURIComponent(active.league_id)}&teams=${sameLeague.map((item) => item.roster_id).join(",")}`;
+    const response = await fetch(url);
+    const body = await response.json();
+    if (!response.ok) throw Error(body.error || "Could not refresh Sleeper");
+    gmSnapshot = body;
+  }
+  function renderFrontOffice() {
+    if (!account()?.session) {
+      view.innerHTML = `${fantasyTabs()}<section class="gmEmpty"><div class="tradeHeroMark">LEDGE · SLEEPER</div><h1>Run both front offices.</h1><p>Sign in, connect your team and Miheer's team, then keep the live league context in one place.</p><button class="tradeAction primary" data-gm-signin>Sign in to connect Sleeper</button></section>`;
+      bindFantasyTabs();
+      view.querySelector("[data-gm-signin]").onclick = () => document.querySelector("#accountButton")?.click();
+      return;
+    }
+    if (gmConnections === null) {
+      view.innerHTML = `${fantasyTabs()}<section class="gmEmpty"><div class="gmSpinner"></div><h2>Loading your front offices…</h2></section>`;
+      bindFantasyTabs();
+      loadGmConnections();
+      return;
+    }
+    if (!gmConnections.length) {
+      view.innerHTML = `${fantasyTabs()}<section class="gmEmpty"><div class="tradeHeroMark">PRIVATE SLEEPER SYNC</div><h1>Connect the two franchises.</h1><p>Add your roster and Miheer's roster from the same league. Ledge only reads Sleeper's public league data.</p><button class="tradeAction primary" data-gm-connect>＋ Connect a Sleeper team</button></section>`;
+      bindFantasyTabs();
+      view.querySelector("[data-gm-connect]").onclick = openGmConnect;
+      return;
+    }
+    const active = gmConnections.find((item) => item.id === state.activeGmConnection) || gmConnections[0];
+    const selected = gmSnapshot?.rosters?.find((row) => +row.rosterId === +active.roster_id);
+    const manager = selected?.manager || {};
+    const record = selected ? `${selected.record.wins}-${selected.record.losses}${selected.record.ties ? `-${selected.record.ties}` : ""}` : "—";
+    const assistantUrl = `${SLEEPER_SNAPSHOT_URL}?league=${encodeURIComponent(active.league_id)}&teams=${gmConnections.filter((item) => item.league_id === active.league_id).map((item) => item.roster_id).join(",")}`;
+    view.innerHTML = `${fantasyTabs()}<div class="gmHero"><div><div class="tradeHeroMark">${esc(gmSnapshot?.league?.name || "SLEEPER LEAGUE")}</div><h1>Front Office</h1><p>Live context for your team and the Miheer rebuild.</p></div><div class="gmHeroActions"><button class="tradeAction" data-gm-refresh>↻ Refresh live data</button><button class="tradeAction primary" data-gm-connect>＋ Add team</button></div></div>
+      <div class="gmTeamSwitcher">${gmConnections.map((item) => `<button class="gmTeamChip ${item.id === active.id ? "active" : ""}" data-gm-team="${item.id}"><span>${esc(item.label)}</span><small>Roster ${item.roster_id}</small></button>`).join("")}</div>
+      ${gmSnapshot ? `<div class="gmSummary"><article class="gmIdentity"><span class="gmAvatar">${manager.avatar ? `<img src="https://sleepercdn.com/avatars/thumbs/${manager.avatar}" alt="">` : esc((manager.username || "M").slice(0, 2).toUpperCase())}</span><div><small>${esc(active.label)}</small><h2>${esc(manager.teamName || manager.displayName || "Fantasy team")}</h2><p>@${esc(manager.username || active.sleeper_username)}</p></div></article><article><span>Record</span><b>${record}</b></article><article><span>Points for</span><b>${Number(selected?.pointsFor || 0).toFixed(1)}</b></article><article><span>League rank</span><b>#${leagueRank(selected, gmSnapshot.rosters)}</b></article>${matchupSummary(selected, gmSnapshot.rosters)}</div>
+      <div class="gmGrid"><main>${renderGmRoster(selected)}</main><aside><section class="gmPanel"><div class="gmPanelHead"><h3>League standings</h3><span>Week ${gmSnapshot.currentWeek}</span></div>${renderGmStandings(gmSnapshot.rosters, active.roster_id)}</section><section class="gmPanel"><div class="gmPanelHead"><h3>Recent moves</h3><span>Live</span></div>${renderGmTransactions(gmSnapshot.transactions)}</section></aside></div>` : `<section class="gmEmpty"><div class="gmSpinner"></div><h2>Refreshing Sleeper…</h2></section>`}
+      <section class="gmAccess"><div><div class="tradeHeroMark">ASSISTANT ACCESS</div><h2>Give me the live league context</h2><p>This read-only link contains public Sleeper data for the league and marks the rosters you manage. It cannot make moves.</p></div><div class="gmAccessActions"><button class="tradeAction primary" data-copy-gm-link data-url="${esc(assistantUrl)}">Copy assistant link</button><button class="tradeAction" data-use-trade>Use in Trade Lab</button><button class="tradeAction danger" data-remove-gm>Remove ${esc(active.label)}</button></div></section>`;
+    bindFantasyTabs();
+    view.querySelectorAll("[data-gm-team]").forEach((button) => button.onclick = async () => { state.activeGmConnection = button.dataset.gmTeam; persist(); gmSnapshot = null; render(); try { await loadGmSnapshot(); } catch (error) { window.toast?.(error.message); } render(); });
+    view.querySelector("[data-gm-refresh]").onclick = async () => { gmSnapshot = null; render(); try { await loadGmSnapshot(); window.toast?.("Sleeper data refreshed"); } catch (error) { window.toast?.(error.message); } render(); };
+    view.querySelector("[data-gm-connect]").onclick = openGmConnect;
+    view.querySelector("[data-copy-gm-link]").onclick = async (event) => { await navigator.clipboard.writeText(event.currentTarget.dataset.url); window.toast?.("Assistant link copied — paste it into our chat"); };
+    view.querySelector("[data-use-trade]").onclick = () => useSnapshotInTradeLab(active);
+    view.querySelector("[data-remove-gm]").onclick = () => removeGmConnection(active);
+  }
+  function leagueRank(selected, rosters) {
+    if (!selected) return "—";
+    return [...(rosters || [])].sort((a, b) => b.record.wins - a.record.wins || b.pointsFor - a.pointsFor).findIndex((row) => +row.rosterId === +selected.rosterId) + 1;
+  }
+  function matchupSummary(selected, rosters) {
+    if (!selected?.matchup) return `<article><span>This week</span><b>—</b></article>`;
+    const opponent = (rosters || []).find((row) => row.matchup?.matchup_id === selected.matchup.matchup_id && row.rosterId !== selected.rosterId);
+    return `<article class="gmMatchup"><span>Week ${gmSnapshot.currentWeek}</span><b>${Number(selected.matchup.points || 0).toFixed(1)}–${Number(opponent?.matchup?.points || 0).toFixed(1)}</b><small>vs ${esc(opponent?.manager?.teamName || "TBD")}</small></article>`;
+  }
+  function gmPlayer(id) { return gmSnapshot?.players?.[String(id)] || players.find((item) => String(item.player_id) === String(id)) || { id, name: `Player ${id}`, position: "" }; }
+  function renderGmRoster(roster) {
+    if (!roster) return `<section class="gmPanel"><p class="tradeEmpty">Roster not found.</p></section>`;
+    const starterSet = new Set((roster.starters || []).map(String));
+    const rows = (roster.players || []).map((id) => ({ ...gmPlayer(id), id: String(id), starter: starterSet.has(String(id)) })).sort((a, b) => Number(b.starter) - Number(a.starter) || ["QB","RB","WR","TE"].indexOf(a.position) - ["QB","RB","WR","TE"].indexOf(b.position));
+    const card = (player) => `<article class="gmPlayer ${player.starter ? "starter" : ""}"><img src="https://sleepercdn.com/content/nfl/players/thumb/${player.id}.jpg" onerror="this.src='assets/ledge-logo.png'" alt=""><div><b>${esc(player.name || `${player.firstName || ""} ${player.lastName || ""}`)}</b><span>${esc(player.position || "")} · ${esc(player.team || "FA")}${player.injuryStatus ? ` · <em>${esc(player.injuryStatus)}</em>` : ""}</span></div><small>${player.starter ? "START" : "BENCH"}</small></article>`;
+    return `<section class="gmPanel"><div class="gmPanelHead"><h3>Current roster</h3><span>${rows.filter((row) => row.starter).length} starters</span></div><div class="gmRoster"><div><h4>Starting lineup</h4>${rows.filter((row) => row.starter).map(card).join("")}</div><div><h4>Bench · IR · Taxi</h4>${rows.filter((row) => !row.starter).map(card).join("")}</div></div></section>`;
+  }
+  function renderGmStandings(rosters, activeRosterId) {
+    return [...(rosters || [])].sort((a, b) => b.record.wins - a.record.wins || b.pointsFor - a.pointsFor).map((row, index) => `<div class="gmStanding ${+row.rosterId === +activeRosterId ? "active" : ""}"><span>${index + 1}</span><div><b>${esc(row.manager.teamName)}</b><small>@${esc(row.manager.username)}</small></div><strong>${row.record.wins}-${row.record.losses}</strong></div>`).join("");
+  }
+  function renderGmTransactions(transactions) {
+    if (!transactions?.length) return `<p class="tradeEmpty">No recent moves.</p>`;
+    return transactions.slice(0, 10).map((tx) => { const adds = Object.keys(tx.adds || {}).map((id) => gmPlayer(id).name).slice(0, 2), drops = Object.keys(tx.drops || {}).map((id) => gmPlayer(id).name).slice(0, 2), label = tx.type === "trade" ? "Trade" : tx.type === "waiver" ? "Waiver" : "Free agent"; return `<article class="gmMove"><span>${label}</span><b>${esc(adds.join(", ") || "League move")}</b>${drops.length ? `<small>Out: ${esc(drops.join(", "))}</small>` : ""}</article>`; }).join("");
+  }
+  async function removeGmConnection(connection) {
+    if (!confirm(`Remove ${connection.label} from your connected teams?`)) return;
+    const { error } = await account().sb.from("fantasy_connections").delete().eq("id", connection.id);
+    if (error) return window.toast?.(error.message);
+    gmConnections = null; gmSnapshot = null; state.activeGmConnection = null; persist(); render(); loadGmConnections(true);
+  }
+  function useSnapshotInTradeLab(active) {
+    if (!gmSnapshot) return;
+    const rosterRows = gmSnapshot.rosters.map((row) => ({ rosterId: row.rosterId, ownerId: row.ownerId, name: row.manager.teamName, username: row.manager.username, avatar: row.manager.avatar || "", players: row.players, starters: row.starters, wins: row.record.wins, losses: row.record.losses, ties: row.record.ties, points: row.pointsFor }));
+    state.sleeper = { username: active.sleeper_username, leagueId: active.league_id, leagueName: gmSnapshot.league.name, rosters: rosterRows, rosterPositions: gmSnapshot.league.rosterPositions, managedRosterIds: gmSnapshot.managedRosterIds };
+    state.teams = gmSnapshot.managedRosters.map((row) => ({ id: crypto.randomUUID(), name: row.manager.teamName, rosterId: String(row.rosterId), assets: [] }));
+    while (state.teams.length < 2) state.teams.push(makeTeam(state.teams.length + 1));
+    state.section = "trades"; persist(); render(); window.toast?.("Both front offices loaded into Trade Lab");
+  }
+  function gmConnectDialog() {
+    let dialog = document.querySelector("#gmConnectDialog");
+    if (dialog) return dialog;
+    dialog = document.createElement("dialog"); dialog.id = "gmConnectDialog"; dialog.className = "sleeperDialog";
+    dialog.innerHTML = `<form method="dialog" class="sleeperBox"><button class="sleeperClose" value="cancel" aria-label="Close">×</button><div class="tradeHeroMark">ADD A FRONT OFFICE</div><h2>Find the Sleeper league</h2><p>Use the Sleeper username attached to the roster you manage.</p><div class="sleeperForm"><input id="gmSleeperUsername" autocomplete="username" placeholder="Sleeper username"><button type="button" id="gmFindLeagues">Find leagues</button></div><div id="gmConnectResults"></div><small>No Sleeper password is needed. The connection is read-only.</small></form>`;
+    document.body.append(dialog); dialog.querySelector("#gmFindLeagues").onclick = findGmLeagues; return dialog;
+  }
+  function openGmConnect() { const dialog = gmConnectDialog(); dialog.querySelector("#gmConnectResults").innerHTML = ""; dialog.showModal(); }
+  async function findGmLeagues() {
+    const dialog = gmConnectDialog(), username = dialog.querySelector("#gmSleeperUsername").value.trim(), box = dialog.querySelector("#gmConnectResults");
+    if (!username) return;
+    box.innerHTML = '<div class="sleeperLoading">Finding leagues…</div>';
+    try { const user = await fetch(`https://api.sleeper.app/v1/user/${encodeURIComponent(username)}`).then((response) => response.ok ? response.json() : null); if (!user?.user_id) throw Error("Sleeper user not found"); const leagues = await fetch(`https://api.sleeper.app/v1/user/${user.user_id}/leagues/nfl/2026`).then((response) => response.json()); box.innerHTML = leagues.map((league) => `<button type="button" class="sleeperLeague" data-gm-league="${league.league_id}" data-gm-username="${esc(username)}"><b>${esc(league.name)}</b><span>${league.total_rosters} teams</span></button>`).join("") || '<div class="sleeperError">No 2026 leagues found</div>'; box.querySelectorAll("[data-gm-league]").forEach((button) => button.onclick = () => chooseGmRoster(button.dataset.gmUsername, button.dataset.gmLeague)); } catch (error) { box.innerHTML = `<div class="sleeperError">${esc(error.message)}</div>`; }
+  }
+  async function chooseGmRoster(username, leagueId) {
+    const box = gmConnectDialog().querySelector("#gmConnectResults"); box.innerHTML = '<div class="sleeperLoading">Loading teams…</div>';
+    try { const [league, rosters, users] = await Promise.all([fetch(`https://api.sleeper.app/v1/league/${leagueId}`).then((r) => r.json()), fetch(`https://api.sleeper.app/v1/league/${leagueId}/rosters`).then((r) => r.json()), fetch(`https://api.sleeper.app/v1/league/${leagueId}/users`).then((r) => r.json())]); const userMap = Object.fromEntries(users.map((item) => [item.user_id, item])); box.innerHTML = `<div class="gmRosterChoices"><p>Choose the roster, then give it a private label like <b>My team</b> or <b>Miheer</b>.</p>${rosters.map((roster) => { const manager = userMap[roster.owner_id] || {}, name = manager.metadata?.team_name || manager.display_name || manager.username || `Team ${roster.roster_id}`; return `<div class="gmRosterChoice"><div><b>${esc(name)}</b><small>@${esc(manager.username || "manager")} · ${roster.settings?.wins || 0}-${roster.settings?.losses || 0}</small></div><input value="${esc(name)}" maxlength="40" aria-label="Private team label"><button type="button" data-add-gm-roster="${roster.roster_id}">Add</button></div>`; }).join("")}</div>`; box.querySelectorAll("[data-add-gm-roster]").forEach((button) => button.onclick = async () => { const label = button.parentElement.querySelector("input").value.trim(); button.disabled = true; const { error } = await account().sb.from("fantasy_connections").upsert({ user_id: account().session.user.id, label: label || "My team", sleeper_username: username, league_id: leagueId, roster_id: +button.dataset.addGmRoster, season: +(league.season || 2026), updated_at: new Date().toISOString() }, { onConflict: "user_id,league_id,roster_id" }); if (error) { button.disabled = false; return window.toast?.(error.message); } gmConnectDialog().close(); gmConnections = null; gmSnapshot = null; render(); loadGmConnections(true); window.toast?.(`${label || "Team"} connected`); }); } catch { box.innerHTML = '<div class="sleeperError">Could not load league rosters</div>'; }
   }
   function rankingState() {
     state.leagueRankings ||= { week: 1, weeks: {} };
@@ -193,9 +347,9 @@
     const p = assetPlayer(a);
     return `<div class="tradeAsset"><img src="${headshot(p)}" onerror="this.src='assets/ledge-logo.png'"><div class="tradeAssetInfo"><b>${esc(p.first_name)} ${esc(p.last_name)}</b><small>${esc(p.position || "")} · ${esc(p.team || "FA")}${p.injury_status ? ` · ${esc(p.injury_status)}` : ""}</small><div class="assetRoute"><span>to</span><select data-route="${j}">${destinations(team)}</select></div></div><div class="assetTools"><span class="marketValue">${value(p)}</span><button class="assetRemove" data-remove="${j}">×</button></div></div>`;
   }
-  function analysis(total, nets, fair, winner) {
+  function analysis(total, impacts, fair, winner) {
     const verdict = fair >= 90 ? "Dead even" : fair >= 75 ? "Fair trade" : fair >= 55 ? "Leans one way" : "Major imbalance";
-    return `<section class="tradeAnalysis"><div class="analysisHead"><div><div class="tradeHeroMark">LEDGE VERDICT</div><h2>${verdict}</h2></div><div class="fairness"><b>${fair}%</b><span>Balance score</span></div></div><div class="analysisGrid">${state.teams.map((t, i) => { const x = total[t.id], n = nets[i], win = n === winner && winner > 0, risk = x.risks.length ? ` Injury risk: ${x.risks.join(", ")}.` : ""; return `<article class="analysisTeam ${win ? "winner" : ""}"><h3>${esc(t.name)}${win ? " · Best return" : ""}</h3><div class="analysisNet ${n >= 0 ? "positive" : "negative"}">${n >= 0 ? "+" : ""}${n}</div><p>Receives ${x.pieces} asset${x.pieces === 1 ? "" : "s"} worth ${x.received}; sends ${x.sent}.${risk}</p></article>`; }).join("")}</div><div class="tradeFooter"><span class="tradeSource">Ledge Market Value blends player-market rank, positional scarcity, league settings, age for dynasty, and current injury status. Player and league data powered by Sleeper; values are independent Ledge estimates.</span></div></section>`;
+    return `<section class="tradeAnalysis"><div class="analysisHead"><div><div class="tradeHeroMark">ROSTER-AWARE VERDICT</div><h2>${verdict}</h2><p class="analysisIntro">Market value is only one layer. This also grades the best lineup, roster depth, positional need, format, and injury risk.</p></div><div class="fairness"><b>${fair}%</b><span>Deal balance</span></div></div><div class="analysisGrid">${state.teams.map((team, index) => { const ledger = total[team.id], impact = impacts[index], win = impact.score === winner && winner > 0; return `<article class="analysisTeam ${win ? "winner" : ""}"><h3>${esc(team.name)}${win ? " · Strongest return" : ""}</h3><div class="analysisNet ${impact.score >= 0 ? "positive" : "negative"}">${impact.score >= 0 ? "+" : ""}${impact.score}</div><div class="impactMetrics"><span><small>Market</small><b>${impact.market >= 0 ? "+" : ""}${impact.market}</b></span><span><small>Starting lineup</small><b>${impact.lineup >= 0 ? "+" : ""}${impact.lineup}</b></span><span><small>Depth</small><b>${impact.depth >= 0 ? "+" : ""}${impact.depth}</b></span></div><p>${esc(impact.summary)}</p><small class="assetSummary">Receives ${ledger.pieces} asset${ledger.pieces === 1 ? "" : "s"} · ${ledger.received} value in / ${ledger.sent} out</small></article>`; }).join("")}</div><div class="tradeFooter"><span class="tradeSource">Use this as decision support, not a fake universal truth. The useful question is whether the deal improves this exact roster in this exact league.</span></div></section>`;
   }
   function savedList() {
     if (!state.saved.length) return "";
