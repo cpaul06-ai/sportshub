@@ -1,0 +1,84 @@
+/* Shared responsive layer: loaded after the original product styles. */
+.mobileRankPosition { display: none; }
+@media (max-width: 900px) {
+  .shell { padding-inline: max(12px, env(safe-area-inset-left)); }
+  .shell > *, .grid > *, .wireLayout > *, .pickLayout > *,
+  .tradeBoard > *, .gmGrid > *, .gmRoster > *, .leagueGrid > * { min-width: 0; }
+  .topbar { gap: 10px; }
+  .topActions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex: 1; }
+  .globalNav { flex: 0 0 100%; }
+  .productNav, .pickTabs, .fantasyTabs { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+  .productTab, .pickSubTab, .fantasyTab { flex: 0 0 auto; white-space: nowrap; }
+  .leagueGrid { grid-template-columns: minmax(0, 1fr); }
+  .leagueHero, .leagueActions, .pickControls, .tradeSettings { flex-wrap: wrap; }
+  .leagueRankLayout, .gmGrid { grid-template-columns: minmax(0, 1fr); }
+  .tradeBoard { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wireLive { max-width: 100%; overscroll-behavior-x: contain; }
+  .accountMenu { overflow-y: auto; }
+}
+@media (max-width: 700px) {
+  body { -webkit-text-size-adjust: 100%; }
+  .shell { padding-bottom: max(28px, env(safe-area-inset-bottom)); }
+  .topbar { display: grid; grid-template-columns: minmax(0, 1fr); height: auto; }
+  .brand { width: 150px; min-width: 0; height: 50px; margin: auto; }
+  .sportsHubLogo { width: 150px; max-width: 100%; height: 48px; }
+  .topActions { width: 100%; justify-content: center; }
+  .topActions .accountButton { padding: 10px; font-size: 14px; }
+  .topActions #accountButton { max-width: 100%; overflow-wrap: anywhere; }
+  .globalNav { width: 100%; gap: 6px; }
+  .globalTab { flex: 1; padding-inline: 10px; }
+  .hero h1, .leagueHero h1, .gmHero h1, .tradeHero h1 { font-size: clamp(30px, 8vw, 42px); }
+  .controls { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .controls > *, .pickControls > * { max-width: 100%; }
+  button, .btn, .accountButton, .globalTab, .productTab, .pickSubTab,
+  .fantasyTab, .tradeAction, .callType, .friendClose { min-height: 44px; }
+  input:not([type=checkbox]):not([type=radio]), select, textarea { font-size: 16px !important; }
+  .rankList { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .teamRow .noteWrap { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .teamRow .noteInput { grid-column: 1 / -1; width: 100%; }
+  .teamRow .tagSelect { width: 100%; }
+  .teamRow .rank, .leagueRankNumber { font-size: 0; }
+  .mobileRankPosition { display: block; width: 100%; min-height: 44px; color: #fff; background: #101a2a; border: 1px solid #415574; border-radius: 8px; padding: 4px; }
+  .teamRow .team > div:last-child { min-width: 0; }
+  .teamRow .logoBox { flex: 0 0 36px; width: 36px; }
+  .teamRow .name { white-space: normal; }
+  .wireTitle button { margin-top: 12px; }
+  .callTypes { max-width: 100%; flex-wrap: wrap; }
+  .composerTop textarea { width: 100%; }
+  .postText, .profilePost p, .threadPostText { overflow-wrap: anywhere; }
+  .postMedia img, .postMedia video { max-width: 100%; }
+  .pickHead, .leagueHero, .leagueRankHero, .tradeHero { display: block; }
+  .pickControls, .leagueActions { margin-top: 12px; }
+  .pickLayout, .tradeBoard, .analysisGrid, .friendGames { grid-template-columns: minmax(0, 1fr); }
+  .fantasyView { width: 100%; max-width: 100%; }
+  .fantasyTabs { width: 100%; }
+  .leagueRankRow { grid-template-columns: 44px 42px minmax(0, 1fr) 52px; gap: 6px; }
+  .leagueRankNumber, .leagueRankRow .managerAvatar, .leagueRankIdentity, .leagueRecord { grid-row: 1; }
+  .leagueRankExtras { grid-column: 1 / -1; grid-row: 2; grid-template-columns: minmax(0, 1fr); }
+  .leagueMove { grid-column: 4; grid-row: 3; }
+  .leagueRankHandle { display: none; }
+  .leagueRankSide { position: static; grid-template-columns: minmax(0, 1fr); }
+  .gmSummary, .tradeSettings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .gmIdentity > div, .gmPlayer > div { min-width: 0; }
+  .gmIdentity h2 { overflow-wrap: anywhere; }
+  .gmRoster, .gmGrid aside { grid-template-columns: minmax(0, 1fr); }
+  .analysisHead, .savedTradeRow, .tradeLabel { flex-wrap: wrap; }
+  .assetRoute { flex-wrap: wrap; }
+  .assetRoute select { max-width: 100%; }
+  .sleeperForm { grid-template-columns: minmax(0, 1fr); }
+  .sleeperForm button { padding: 12px; }
+  .friendHead, .friendPosterHead, .profileHero, .friendPicksHead { flex-wrap: wrap; gap: 10px; }
+  .friendPosterHead > img, .friendDialog.fullRankings .friendPosterHead > img { max-width: 100%; width: 180px; }
+  .friendRankGrid { grid-auto-flow: row; grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
+  .friendDialog.fullRankings .friendRankingPoster { padding: 10px; }
+  .friendBody, .detailInner { padding: 12px; }
+  dialog { max-width: calc(100vw - 16px); max-height: calc(100dvh - 24px); overflow-y: auto; }
+  .friendBody { max-height: 70dvh; }
+  .accountMenu { padding: 12px; place-items: start center; }
+  .accountMenuCard { width: 100%; max-width: 420px; }
+  .authNotice { max-width: calc(100vw - 24px); width: max-content; bottom: max(16px, env(safe-area-inset-bottom)); border-radius: 12px; }
+  .leagueForm { flex-wrap: wrap; }
+  .memberItem { flex-wrap: wrap; overflow-wrap: anywhere; }
+  .friendMatchup { grid-template-columns: minmax(0, 1fr); }
+  .friendMatchup > em { display: none; }
+}

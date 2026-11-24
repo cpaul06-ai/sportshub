@@ -1717,6 +1717,7 @@
         cursor: not-allowed;
       }
     </style>
+    <link rel="stylesheet" href="mobile.css?v=20261124-1" />
   </head>
   <body>
     <div class="shell">
@@ -1856,7 +1857,7 @@
             <div class="eyebrow">NFL power rankings</div>
             <h1>Rank the league.<br />Track every move.</h1>
             <p>
-              Drag teams into order. Every week saves automatically to your
+              Choose a rank or drag teams into order. Every week saves automatically to your
               account.
             </p>
           </div>
@@ -2166,6 +2167,26 @@
           .join("");
       }
       let dragged = null;
+      // Native selects support touch and keyboards without interfering with page scrolling.
+      function addRankPositions() {
+        list.querySelectorAll('.teamRow').forEach((row, index) => {
+          const select = document.createElement('select');
+          select.className = 'mobileRankPosition';
+          select.setAttribute('aria-label', `Rank ${info[row.dataset.code].name}`);
+          select.innerHTML = Array.from({length: current().length}, (_, i) => `<option value="${i}">${i + 1}</option>`).join('');
+          select.value = index;
+          select.onchange = () => {
+            const ranks = current(), from = ranks.indexOf(row.dataset.code);
+            ranks.splice(Number(select.value), 0, ranks.splice(from, 1)[0]);
+            render();
+          };
+          row.querySelector('.rank').append(select);
+        });
+      }
+      new MutationObserver(() => {
+        if (list.querySelector('.teamRow:not(:has(.mobileRankPosition))')) addRankPositions();
+      }).observe(list, {childList: true});
+      addRankPositions();
       list.addEventListener("dragstart", (e) => {
         dragged = e.target.closest(".teamRow");
         if (dragged) dragged.classList.add("dragging");
@@ -2855,6 +2876,6 @@
     <script src="wire.js?v=20261001-1"></script>
     <script src="pickem.js?v=20261105-2"></script>
     <script src="account.js?v=20260922-1"></script>
-    <script src="fantasy.js?v=20261113-2"></script>
+    <script src="fantasy.js?v=20261124-1"></script>
   </body>
 </html>

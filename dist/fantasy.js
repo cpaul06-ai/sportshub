@@ -331,6 +331,19 @@
   function bindLeagueRankDrag() {
     const board = view.querySelector("#leagueRankBoard");
     if (!board) return;
+    board.querySelectorAll('.leagueRankRow').forEach((row, index) => {
+      const select = document.createElement('select');
+      select.className = 'mobileRankPosition';
+      select.setAttribute('aria-label', `Rank ${row.querySelector('.leagueRankIdentity strong').textContent}`);
+      select.innerHTML = currentLeagueRanking().map((_, i) => `<option value="${i}">${i + 1}</option>`).join('');
+      select.value = index;
+      select.onchange = () => {
+        const ranking = currentLeagueRanking(), from = ranking.indexOf(row.dataset.rosterId);
+        ranking.splice(Number(select.value), 0, ranking.splice(from, 1)[0]);
+        persist(); render();
+      };
+      row.querySelector('.leagueRankNumber').append(select);
+    });
     let dragged = null;
     board.addEventListener("dragstart", (e) => { dragged = e.target.closest(".leagueRankRow"); dragged?.classList.add("dragging"); });
     board.addEventListener("dragover", (e) => { e.preventDefault(); const over = e.target.closest(".leagueRankRow"); board.querySelectorAll(".dragover").forEach((x) => x.classList.remove("dragover")); if (over && over !== dragged) over.classList.add("dragover"); });
